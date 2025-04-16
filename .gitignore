@@ -1,0 +1,15 @@
+# Ignore CMake build directories
+cmake-build-*/
+
+# Ignore build artifacts
+*.exe
+*.obj
+
+# Ignore most of the .idea folder
+.idea/
+!.idea/codeStyles/
+!.idea/misc.xml
+!.idea/modules.xml
+
+# Keep the build file
+!CMakeLists.txt
