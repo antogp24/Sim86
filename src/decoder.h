@@ -1,6 +1,7 @@
 #pragma once
 
 #include "util.h"
+#include "string_builder.h"
 #include <cstdarg>
 
 #define INSTRUCTION_LINE_SIZE 32
@@ -31,20 +32,23 @@ struct RegisterInfo {
 
 u16 getRegisterValue(RegisterInfo const& reg);
 void setRegisterValue(RegisterInfo const& reg, u16 value);
+const char* getRegisterName(RegisterInfo const& reg);
 RegisterInfo getRegisterInfo(const char* reg);
-
-enum ImmediateType: u8 {
-    Immediate_Byte = 0,
-    Immediate_Word = 1,
-};
 
 struct Immediate {
     union {
         i8  byte;
         i16 word;
     };
-    ImmediateType type : 1;
+    bool wide : 1;
 };
+
+#define signExtendByte(value) (cast(i8)value)
+#define signExtendWord(value) (cast(i16)value)
+
+#define makeImmediateByte(Byte) Immediate{.byte=Byte, .wide=0}
+#define makeImmediateWord(Word) Immediate{.word=Word, .wide=1}
+#define makeImmediate(Wide, Value) ((Wide) ? makeImmediateWord(signExtendWord(Value)) : makeImmediateByte(signExtendByte(Value)))
 
 namespace EffectiveAddress {
 	enum struct Base : u8 {
@@ -56,23 +60,67 @@ namespace EffectiveAddress {
 		Base base;
 		Immediate displacement;
 	};
+	const char* base2string(Base base);
 }
 
-enum struct InstType : u8 {
+enum struct Instruction_Operand_Type : u8 {
 	None = 0,
 	Immediate,
 	Register,
 	EffectiveAddress,
 };
 
-struct Inst {
+enum struct Instruction_Operand_Prefix : u8 { None = 0, Byte, Word };
+
+struct Instruction_Operand {
 	union {
 		RegisterInfo reg;
 		EffectiveAddress::Info address;
 		Immediate immediate;
 	};
-	InstType type : 2;
+	Instruction_Operand_Type type     : 2;
+	Instruction_Operand_Prefix prefix : 2;
 };
+
+#define InstPrefix(Wide)                       \
+	((Wide) ? Instruction_Operand_Prefix::Word \
+            : Instruction_Operand_Prefix::Byte)
+
+#define InstImmediateByte(Byte) Instruction_Operand{ \
+	.immediate = Immediate{.byte=Byte, .wide=0},     \
+	.type = Instruction_Operand_Type::Immediate,     \
+	.prefix = Instruction_Operand_Prefix::None       \
+}
+
+#define InstImmediateWord(Word) Instruction_Operand{ \
+	.immediate = Immediate{.word=Word, .wide=1},     \
+	.type = Instruction_Operand_Type::Immediate,     \
+	.prefix = Instruction_Operand_Prefix::None       \
+}
+
+#define InstImmediate(Wide, Value) Instruction_Operand{ \
+	.immediate = makeImmediate(Wide, Value),            \
+	.type = Instruction_Operand_Type::Immediate,        \
+	.prefix = Instruction_Operand_Prefix::None          \
+}
+
+#define InstImmediatePrefixed(Wide, Value) Instruction_Operand{ \
+	.immediate = makeImmediate(Wide, Value),                    \
+	.type = Instruction_Operand_Type::Immediate,                \
+	.prefix = InstPrefix(Wide)                                  \
+}
+
+#define InstGeneralReg(Type, Usage) Instruction_Operand{           \
+	.reg = {.type = Register::Type, .usage = RegisterUsage::Usage},\
+	.type = Instruction_Operand_Type::Register,                    \
+}
+
+#define InstNonGeneralReg(Type) Instruction_Operand{           \
+	.reg = {.type = Register::Type, .usage = RegisterUsage::x},\
+	.type = Instruction_Operand_Type::Register,                \
+}
+
+String_Builder operand2string(Instruction_Operand const& operand);
 
 namespace FlagsRegister {
     enum struct Bit : u16 { CF = 0, PF = 2, AF = 4, ZF = 6, SF, OF, IF, DF, TF};
@@ -99,12 +147,32 @@ constexpr const char* REG_TABLE[8][2] = {
 	[0b111] = {"bh", "di"},
 };
 
+// Expects to be indexed as [REG][W] or as [R/M][W]
+constexpr Instruction_Operand REG_Table[8][2] = {
+	[0b000] = {InstGeneralReg(a,l), InstGeneralReg(a,x)},
+	[0b001] = {InstGeneralReg(c,l), InstGeneralReg(c,x)},
+	[0b010] = {InstGeneralReg(d,l), InstGeneralReg(d,x)},
+	[0b011] = {InstGeneralReg(b,l), InstGeneralReg(b,x)},
+	[0b100] = {InstGeneralReg(a,h), InstNonGeneralReg(sp)},
+	[0b101] = {InstGeneralReg(c,h), InstNonGeneralReg(bp)},
+	[0b110] = {InstGeneralReg(d,h), InstNonGeneralReg(si)},
+	[0b111] = {InstGeneralReg(b,h), InstNonGeneralReg(di)},
+};
+
 // Expects to be indexed as [SR]
 constexpr const char* SR_TABLE[4] = {
 	[0b00] = "es",
 	[0b01] = "cs",
 	[0b10] = "ss",
 	[0b11] = "ds",
+};
+
+// Expects to be indexed as [SR]
+constexpr Instruction_Operand SR_Table[4] = {
+	[0b00] = InstNonGeneralReg(es),
+	[0b01] = InstNonGeneralReg(cs),
+	[0b10] = InstNonGeneralReg(ss),
+	[0b11] = InstNonGeneralReg(ds),
 };
 
 // Expects to be indexed as [R/M]
@@ -117,6 +185,18 @@ constexpr const char* EFFECTIVE_ADDRESS_TABLE[8] = {
 	[0b101] = "di",
 	[0b110] = "bp",      // DIRECT ADDRESS if MOD = 00
 	[0b111] = "bx",
+};
+
+// Expects to be indexed as [R/M]
+constexpr EffectiveAddress::Base Effective_Address_Table[8] = {
+	[0b000] = EffectiveAddress::Base::bx_si,
+	[0b001] = EffectiveAddress::Base::bx_di,
+	[0b010] = EffectiveAddress::Base::bp_si,
+	[0b011] = EffectiveAddress::Base::bp_di,
+	[0b100] = EffectiveAddress::Base::si,
+	[0b101] = EffectiveAddress::Base::di,
+	[0b110] = EffectiveAddress::Base::bp,      // DIRECT ADDRESS if MOD = 00
+	[0b111] = EffectiveAddress::Base::bx,
 };
 
 constexpr const char* registerNames[RegisterCount] = {
@@ -135,8 +215,6 @@ extern u16 gRegisterValues[RegisterCount];
 
 Register getReg(const char* reg);
 #define getRegFullName(reg) registerFullNames[RegToID(reg)]
-#define signExtendByte(value) (cast(i8)value)
-#define signExtendWord(value) (cast(i16)value)
 
 force_inline inline void incrementIP(i16 const value) {
 	RegisterInfo constexpr ip = {Register::ip, RegisterUsage::x};
@@ -286,6 +364,24 @@ struct Decoder_Context {
 		vfprintf(outFile, fmt, args);
 		fputc('\n', outFile);
 		va_end(args);
+	}
+
+	void printInst(const char* mnemonic, Instruction_Operand const& dst, Instruction_Operand const& src) const {
+		char instruction[INSTRUCTION_LINE_SIZE+1] = {0};
+		auto builderDst = operand2string(dst);
+		auto builderSrc = operand2string(src);
+		snprintf(instruction, sizeof(instruction), "%s %s, %s", mnemonic, builderDst.items, builderSrc.items);
+		print(INSTRUCTION_FMT" ", instruction);
+		builderDst.destroy();
+		builderSrc.destroy();
+	}
+
+	void printInst(const char* mnemonic, Instruction_Operand const& operand) const {
+		char instruction[INSTRUCTION_LINE_SIZE+1] = {0};
+		auto builder = operand2string(operand);
+		snprintf(instruction, sizeof(instruction), "%s %s", mnemonic, builder.items);
+		print(INSTRUCTION_FMT" ", instruction);
+		builder.destroy();
 	}
 
 	void printInst(const char* mnemonic, const char* dst, const char* src) const {

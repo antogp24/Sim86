@@ -63,9 +63,7 @@ void String_Builder::append(char const c) {
 }
 
 void String_Builder::append(const char* str, size_t const count) {
-	if (count <= 0) {
-		return;
-	}
+	if (count == 0) return;
 
 	size_t const old_len = len;
 	len += count;
@@ -101,7 +99,9 @@ void String_Builder::append(String_View const& view) {
 }
 
 void String_Builder::append(const char* str) {
-	append(str, strlen(str));
+	size_t const len = strlen(str);
+	if (len == 0) return;
+	append(str, len);
 }
 
 void String_Builder::append_u8(u8 const value) {

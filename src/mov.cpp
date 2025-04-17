@@ -13,6 +13,8 @@ bool isByte_MOV(u8 const byte) {
 void decode_MOV(Decoder_Context& decoder, u8& byte) {
 	assertTrue(isByte_MOV(byte));
 
+	Instruction_Operand src = {}, dst = {};
+
 	// MOV: 1. Register/memory to/from register.
 	if (byte >> 2 == 0b100010) {
 		bool const D = (byte >> 1) & 1;
@@ -23,81 +25,56 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		u8 const REG = (byte >> 3) & 0b111;
 		u8 const R_M = (byte)      & 0b111;
 
-		String_Builder src = string_builder_make();
-		String_Builder dst = string_builder_make();
-		defer(src.destroy());
-		defer(dst.destroy());
-
 		// Memory Mode (if R/M=110 then 16-bit displacement, otherwise no displacement).
 		if (MOD == 0b00) {
-			char direct_address[U16_STR_SIZE_BASE10] = {0};
-			if (R_M == 0b110) {
-				u16 const address = decoder.advance16Bits(byte);
-				snprintf(direct_address, sizeof(direct_address), "%" PRIu16, address);
-			}
+            i16 const displacement = (R_M == 0b110) ? signExtendWord(decoder.advance16Bits(byte)) : signExtendWord(0);
 
 			// (D = 0) REG is the source.
-			src.append(REG_TABLE[REG][W]);
-			dst.append("[");
-			dst.append(R_M != 0b110 ? EFFECTIVE_ADDRESS_TABLE[R_M] : direct_address);
-			dst.append(']');
+			src = REG_Table[REG][W];
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateWord(displacement);
 		}
 		// Memory Mode (8-bit displacement)
 		else if (MOD == 0b01) {
 			i8 const displacement = signExtendByte(decoder.advance08Bits(byte));
 
 			// (D = 0) REG is the source.
-			src.append(REG_TABLE[REG][W]);
-			dst.append("[");
-			dst.append(EFFECTIVE_ADDRESS_TABLE[R_M]);
-			if (displacement > 0) {
-				dst.append(" + ");
-				dst.append(displacement);
-			} else if (displacement < 0) {
-				dst.append(" - ");
-				dst.append(-displacement);
-			}
-			dst.append(']');
+			src = REG_Table[REG][W];
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateByte(displacement);
 		}
 		// Memory Mode (16-bit displacement)
 		else if (MOD == 0b10) {
 			i16 const displacement = signExtendWord(decoder.advance16Bits(byte));
 
 			// (D = 0) REG is the source.
-			src.append(REG_TABLE[REG][W]);
-			dst.append("[");
-			dst.append(EFFECTIVE_ADDRESS_TABLE[R_M]);
-			if (displacement > 0) {
-				dst.append(" + ");
-				dst.append(displacement);
-			} else if (displacement < 0) {
-				dst.append(" - ");
-				dst.append(-displacement);
-			}
-			dst.append(']');
+			src = REG_Table[REG][W];
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateWord(displacement);
 		}
 		// Register Mode (no displacement)
 		else if (MOD == 0b11) {
 			// (D = 0) REG is the source.
-			dst.append(REG_TABLE[R_M][W]);
-			src.append(REG_TABLE[REG][W]);
+			dst = REG_Table[R_M][W];
+			src = REG_Table[REG][W];
 		}
 
 		if (D) { // (D = 1) REG is the destination.
-			Swap(String_Builder, src, dst);
+			Swap(Instruction_Operand, src, dst);
 		}
 
-		decoder.printInst("mov", dst.items, src.items);
+		decoder.printInst("mov", dst, src);
 		if (decoder.exec) {
-			if (dst.items[0] == '[' || src.items[0] == '[') {
+			if (dst.type == Instruction_Operand_Type::EffectiveAddress || src.type == Instruction_Operand_Type::EffectiveAddress) {
 				decoder.println("; " LOG_ERROR_STRING ": Memory Expressions are Unimplemented.");
 			} else {
-                auto const dstReg = getRegisterInfo(dst.items);
-                auto const srcReg = getRegisterInfo(src.items);
-                u16 const oldDstValue = getRegisterValue(dstReg);
-                u16 const srcValue = getRegisterValue(srcReg);
-                setRegisterValue(dstReg, srcValue);
-                decoder.print("; %s:0x%x->0x%x ", dst.items, oldDstValue, srcValue);
+                u16 const oldDstValue = getRegisterValue(dst.reg);
+                u16 const srcValue = getRegisterValue(src.reg);
+                setRegisterValue(dst.reg, srcValue);
+                decoder.print("; %s:0x%x->0x%x ", getRegisterName(dst.reg), oldDstValue, srcValue);
 				decoder.printIP("\n");
 			}
 		} else {
@@ -117,71 +94,44 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		u8 const R_M = (byte)      & 0b111;
 		u8 const MOD = (byte >> 6) & 0b11;
 
-		String_Builder src = string_builder_make();
-		String_Builder dst = string_builder_make();
-		defer(src.destroy());
-		defer(dst.destroy());
-
 		// Memory Mode (if R/M=110 then 16-bit displacement, otherwise no displacement).
 		if (MOD == 0b00) {
-			char direct_address[U16_STR_SIZE_BASE10] = {0};
-			if (R_M == 0b110) {
-				u16 const address = decoder.advance16Bits(byte);
-				snprintf(direct_address, sizeof(direct_address), "%" PRIu16, address);
-			}
-
+            i16 const displacement = (R_M == 0b110) ? signExtendWord(decoder.advance16Bits(byte)) : signExtendWord(0);
 			u16 const immediate = decoder.advance8or16Bits(W, byte);
 
-			src.append(W ? "word " : "byte ");
-			W ? src.append(signExtendWord(immediate)) : src.append(signExtendByte(immediate));
-			dst.append("[");
-			dst.append(R_M != 0b110 ? EFFECTIVE_ADDRESS_TABLE[R_M] : direct_address);
-			dst.append(']');
+			src = InstImmediatePrefixed(W, immediate);
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateWord(displacement);
 		}
 		// Memory Mode (8-bit displacement)
 		else if (MOD == 0b01) {
 			i8 const displacement = signExtendByte(decoder.advance08Bits(byte));
 			u16 const immediate = decoder.advance8or16Bits(W, byte);
 
-			src.append(W ? "word " : "byte ");
-			W ? src.append(signExtendWord(immediate)) : src.append(signExtendByte(immediate));
-			dst.append("[");
-			dst.append(EFFECTIVE_ADDRESS_TABLE[R_M]);
-			if (displacement > 0) {
-				dst.append(" + ");
-				dst.append(displacement);
-			} else if (displacement < 0) {
-				dst.append(" - ");
-				dst.append(-displacement);
-			}
-			dst.append(']');
+			src = InstImmediatePrefixed(W, immediate);
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateByte(displacement);
 		}
 		// Memory Mode (16-bit displacement)
 		else if (MOD == 0b10) {
 			i16 const displacement = signExtendWord(decoder.advance16Bits(byte));
 			u16 const immediate = decoder.advance8or16Bits(W, byte);
 
-			src.append(W ? "word " : "byte ");
-			W ? src.append(signExtendWord(immediate)) : src.append(signExtendByte(immediate));
-			dst.append("[");
-			dst.append(EFFECTIVE_ADDRESS_TABLE[R_M]);
-			if (displacement > 0) {
-				dst.append(" + ");
-				dst.append(displacement);
-			} else if (displacement < 0) {
-				dst.append(" - ");
-				dst.append(-displacement);
-			}
-			dst.append(']');
+			src = InstImmediatePrefixed(W, immediate);
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateWord(displacement);
 		}
 		// Register Mode (no displacement)
 		else if (MOD == 0b11) {
 			u16 const immediate = decoder.advance8or16Bits(W, byte);
-			W ? src.append(signExtendWord(immediate)) : src.append(signExtendByte(immediate));
-			dst.append(REG_TABLE[R_M][W]);
+			src = InstImmediate(W, immediate);
+			dst = REG_Table[R_M][W];
 		}
 
-		decoder.printInst("mov", dst.items, src.items);
+		decoder.printInst("mov", dst, src);
 		decoder.print("; (W:%d, ", W);
 		decoder.printMOD(MOD, ' ');
 		decoder.printR_M(R_M, ')');
@@ -192,18 +142,16 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 	else if (byte >> 4 == 0b1011) {
 		bool const W = (byte >> 3) & 1;
 		u8 const REG = byte & 0b111;
-		const char* dst = REG_TABLE[REG][W];
-		char src[U16_STR_SIZE_BASE10] = {0};
-
 		u16 const data = decoder.advance8or16Bits(W, byte);
-		snprintf(src, sizeof(src), "%" PRIu16, data);
+
+		dst = REG_Table[REG][W];
+		src = InstImmediate(W, data);
 
 		decoder.printInst("mov", dst, src);
 		if (decoder.exec) {
-			auto const dstReg = getRegisterInfo(dst);
-            u16 const oldDstValue = getRegisterValue(dstReg);
-			setRegisterValue(dstReg, data);
-			decoder.print("; %s:0x%x->0x%x ", dst, oldDstValue, data);
+            u16 const oldDstValue = getRegisterValue(dst.reg);
+			setRegisterValue(dst.reg, data);
+			decoder.print("; %s:0x%x->0x%x ", getRegisterName(dst.reg), oldDstValue, data);
 			decoder.printIP("\n");
 		} else {
             decoder.print("; (W:%d, ", W);
@@ -217,18 +165,18 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		bool const D = (byte >> 1) & 1;
 		bool const W = byte & 1;
 
-		u16 const address = decoder.advance16Bits(byte);
-		char address_string[U16_STR_SIZE_BASE10+StrLen("[]")] = {0};
-		snprintf(address_string, sizeof(address_string), "[%" PRIu16"]", address);
+		i16 const address = signExtendWord(decoder.advance16Bits(byte));
 
 		// (D = 0) The address is the source.
 		const char* description = "Memory to accumulator";
-		const char* src = address_string;
-		const char* dst = const_cast<char*>(REG_TABLE[0b000][W]);
+		src.type = Instruction_Operand_Type::EffectiveAddress;
+		src.address.base = EffectiveAddress::Base::Direct;
+		src.address.displacement = makeImmediateWord(address);
+		dst = REG_Table[0b000][W];
 
 		if (D) { // (D = 1) The address is the destination.
 			description = "Accumulator to memory";
-			Swap(const char*, src, dst);
+			Swap(Instruction_Operand, src, dst);
 		}
 
 		decoder.printInst("mov", dst, src);
@@ -244,81 +192,56 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		u8 const SR  = (byte >> 3) & 0b11;
 		u8 const R_M = (byte)      & 0b111;
 
-		String_Builder src = string_builder_make();
-		String_Builder dst = string_builder_make();
-		defer(src.destroy());
-		defer(dst.destroy());
-
 		// Memory Mode (if R/M=110 then 16-bit displacement, otherwise no displacement).
 		if (MOD == 0b00) {
-			char direct_address[U16_STR_SIZE_BASE10] = {0};
-			if (R_M == 0b110) {
-				u16 const address = decoder.advance16Bits(byte);
-				snprintf(direct_address, sizeof(direct_address), "%" PRIu16, address);
-			}
+            i16 const displacement = (R_M == 0b110) ? signExtendWord(decoder.advance16Bits(byte)) : signExtendWord(0);
 
 			// (D = 0) SR is the source.
-			src.append(SR_TABLE[SR]);
-			dst.append("[");
-			dst.append(R_M != 0b110 ? EFFECTIVE_ADDRESS_TABLE[R_M] : direct_address);
-			dst.append(']');
+			src = SR_Table[SR];
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateWord(displacement);
 		}
 		// Memory Mode (8-bit displacement)
 		else if (MOD == 0b01) {
 			i8 const displacement = signExtendByte(decoder.advance08Bits(byte));
 
 			// (D = 0) SR is the source.
-			src.append(SR_TABLE[SR]);
-			dst.append("[");
-			dst.append(EFFECTIVE_ADDRESS_TABLE[R_M]);
-			if (displacement > 0) {
-				dst.append(" + ");
-				dst.append(displacement);
-			} else if (displacement < 0) {
-				dst.append(" - ");
-				dst.append(-displacement);
-			}
-			dst.append(']');
+			src = SR_Table[SR];
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateByte(displacement);
 		}
 		// Memory Mode (16-bit displacement)
 		else if (MOD == 0b10) {
 			i16 const displacement = signExtendWord(decoder.advance16Bits(byte));
 
 			// (D = 0) SR is the source.
-			src.append(SR_TABLE[SR]);
-			dst.append("[");
-			dst.append(EFFECTIVE_ADDRESS_TABLE[R_M]);
-			if (displacement > 0) {
-				dst.append(" + ");
-				dst.append(displacement);
-			} else if (displacement < 0) {
-				dst.append(" - ");
-				dst.append(-displacement);
-			}
-			dst.append(']');
+			src = SR_Table[SR];
+			dst.type = Instruction_Operand_Type::EffectiveAddress;
+			dst.address.base = Effective_Address_Table[R_M];
+			dst.address.displacement = makeImmediateWord(displacement);
 		}
 		// Register Mode (no displacement)
 		else if (MOD == 0b11) {
 			// (D = 0) SR is the source.
-			dst.append(REG_TABLE[R_M][0]);
-			src.append(SR_TABLE[SR]);
+			dst = REG_Table[R_M][0];
+			src = SR_Table[SR];
 		}
 
 		if (D) { // (D = 1) SR is the destination.
-			Swap(String_Builder, src, dst);
+			Swap(Instruction_Operand, src, dst);
 		}
 
-		decoder.printInst("mov", dst.items, src.items);
+		decoder.printInst("mov", dst, src);
 		if (decoder.exec) {
-			if (dst.items[0] == '[' || src.items[0] == '[') {
+			if (dst.type == Instruction_Operand_Type::EffectiveAddress || src.type == Instruction_Operand_Type::EffectiveAddress) {
 				decoder.println("; " LOG_ERROR_STRING ": Memory Expressions are Unimplemented.");
 			} else {
-                auto const dstReg = getRegisterInfo(dst.items);
-                auto const srcReg = getRegisterInfo(src.items);
-                u16 const oldDstValue = getRegisterValue(dstReg);
-                u16 const srcValue = getRegisterValue(srcReg);
-                setRegisterValue(dstReg, srcValue);
-                decoder.print("; %s:0x%x->0x%x ", dst.items, oldDstValue, srcValue);
+                u16 const oldDstValue = getRegisterValue(dst.reg);
+                u16 const srcValue = getRegisterValue(src.reg);
+                setRegisterValue(dst.reg, srcValue);
+                decoder.print("; %s:0x%x->0x%x ", getRegisterName(dst.reg), oldDstValue, srcValue);
 				decoder.printIP("\n");
 			}
 		} else {
