@@ -10,6 +10,22 @@ bool isByte_MOV(u8 const byte) {
 	return result;
 }
 
+void exec_MOV(Decoder_Context const& decoder, Instruction_Operand const& dst, Instruction_Operand const& src) {
+    if (IsBinaryInstTypeOrderValid(dst, src)) {
+    	String_Builder dstName = getInstOpName(dst); defer(dstName.destroy());
+        u16 const oldValue = getInstOpValue(dst);
+        u16 const newValue = getInstOpValue(src);
+        setInstOpValue(dst, newValue);
+        decoder.print("; %s:0x%x->0x%x ", dstName.items, oldValue, newValue);
+        decoder.printlnIP();
+	} else {
+        decoder.println("; " LOG_ERROR_STRING ": `%s <%s> <%s>` is an invalid order of types.",
+        	"mov",
+        	Instruction_Operand_Type_Names[static_cast<u8>(dst.type)],
+        	Instruction_Operand_Type_Names[static_cast<u8>(src.type)]);
+	}
+}
+
 void decode_MOV(Decoder_Context& decoder, u8& byte) {
 	assertTrue(isByte_MOV(byte));
 
@@ -34,6 +50,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateWord(displacement);
+			dst.address.wide = W;
 		}
 		// Memory Mode (8-bit displacement)
 		else if (MOD == 0b01) {
@@ -44,6 +61,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateByte(displacement);
+			dst.address.wide = W;
 		}
 		// Memory Mode (16-bit displacement)
 		else if (MOD == 0b10) {
@@ -54,6 +72,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateWord(displacement);
+			dst.address.wide = W;
 		}
 		// Register Mode (no displacement)
 		else if (MOD == 0b11) {
@@ -67,17 +86,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		}
 
 		decoder.printInst("mov", dst, src);
-		if (decoder.exec) {
-			if (dst.type == Instruction_Operand_Type::EffectiveAddress || src.type == Instruction_Operand_Type::EffectiveAddress) {
-				decoder.println("; " LOG_ERROR_STRING ": Memory Expressions are Unimplemented.");
-			} else {
-                u16 const oldDstValue = getRegisterValue(dst.reg);
-                u16 const srcValue = getRegisterValue(src.reg);
-                setRegisterValue(dst.reg, srcValue);
-                decoder.print("; %s:0x%x->0x%x ", getRegisterName(dst.reg), oldDstValue, srcValue);
-				decoder.printIP("\n");
-			}
-		} else {
+		if (!decoder.exec) {
             decoder.print("; (D:%d, W:%d, ", D, W);
             decoder.printMOD(MOD, ' ');
             decoder.printREG(REG, ' ');
@@ -103,6 +112,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateWord(displacement);
+			dst.address.wide = W;
 		}
 		// Memory Mode (8-bit displacement)
 		else if (MOD == 0b01) {
@@ -113,6 +123,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateByte(displacement);
+			dst.address.wide = W;
 		}
 		// Memory Mode (16-bit displacement)
 		else if (MOD == 0b10) {
@@ -123,6 +134,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateWord(displacement);
+			dst.address.wide = W;
 		}
 		// Register Mode (no displacement)
 		else if (MOD == 0b11) {
@@ -132,11 +144,13 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		}
 
 		decoder.printInst("mov", dst, src);
-		decoder.print("; (W:%d, ", W);
-		decoder.printMOD(MOD, ' ');
-		decoder.printR_M(R_M, ')');
-		decoder.print(" <- ");
-		decoder.printByteStack();
+		if (!decoder.exec) {
+            decoder.print("; (W:%d, ", W);
+            decoder.printMOD(MOD, ' ');
+            decoder.printR_M(R_M, ')');
+            decoder.print(" <- ");
+            decoder.printByteStack();
+		}
 	}
 	// MOV: 3. Immediate to register.
 	else if (byte >> 4 == 0b1011) {
@@ -148,12 +162,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		src = InstImmediate(W, data);
 
 		decoder.printInst("mov", dst, src);
-		if (decoder.exec) {
-            u16 const oldDstValue = getRegisterValue(dst.reg);
-			setRegisterValue(dst.reg, data);
-			decoder.print("; %s:0x%x->0x%x ", getRegisterName(dst.reg), oldDstValue, data);
-			decoder.printIP("\n");
-		} else {
+		if (!decoder.exec) {
             decoder.print("; (W:%d, ", W);
             decoder.printREG(REG, ' ');
             decoder.print(" <- ");
@@ -180,8 +189,10 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		}
 
 		decoder.printInst("mov", dst, src);
-        decoder.print("; (%s, W:%d) <- ", description, W);
-        decoder.printByteStack();
+		if (!decoder.exec) {
+            decoder.print("; (%s, W:%d) <- ", description, W);
+            decoder.printByteStack();
+		}
 	}
 	// MOV: 5. Register/memory to segment register (Or vice versa)
 	else if (byte == 0b10001110 || byte == 0b10001100) {
@@ -201,6 +212,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateWord(displacement);
+			dst.address.wide = true;
 		}
 		// Memory Mode (8-bit displacement)
 		else if (MOD == 0b01) {
@@ -211,6 +223,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateByte(displacement);
+			dst.address.wide = true;
 		}
 		// Memory Mode (16-bit displacement)
 		else if (MOD == 0b10) {
@@ -221,6 +234,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateWord(displacement);
+			dst.address.wide = true;
 		}
 		// Register Mode (no displacement)
 		else if (MOD == 0b11) {
@@ -234,17 +248,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		}
 
 		decoder.printInst("mov", dst, src);
-		if (decoder.exec) {
-			if (dst.type == Instruction_Operand_Type::EffectiveAddress || src.type == Instruction_Operand_Type::EffectiveAddress) {
-				decoder.println("; " LOG_ERROR_STRING ": Memory Expressions are Unimplemented.");
-			} else {
-                u16 const oldDstValue = getRegisterValue(dst.reg);
-                u16 const srcValue = getRegisterValue(src.reg);
-                setRegisterValue(dst.reg, srcValue);
-                decoder.print("; %s:0x%x->0x%x ", getRegisterName(dst.reg), oldDstValue, srcValue);
-				decoder.printIP("\n");
-			}
-		} else {
+		if (!decoder.exec) {
             decoder.print("; (D:%d, ", D);
             decoder.printMOD(MOD, ' ');
             decoder.printSR(SR, ' ');
@@ -252,5 +256,11 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
             decoder.print(" <- ");
             decoder.printByteStack();
 		}
+	} else {
+		unreachable();
 	}
+
+    if (decoder.exec) {
+    	exec_MOV(decoder, dst, src);
+    }
 }

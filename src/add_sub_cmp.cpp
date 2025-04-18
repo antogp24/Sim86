@@ -58,6 +58,28 @@ static u16 execOp(Common_Format const& format, u16 const A, u16 const B) {
 	}
 }
 
+void exec_ADD_SUB_CMP(
+	Decoder_Context const& decoder,
+	Instruction_Operand const& dst,
+	Instruction_Operand const& src,
+	Common_Format const& format)
+{
+    if (IsBinaryInstTypeOrderValid(dst, src)) {
+    	String_Builder dstName = getInstOpName(dst); defer(dstName.destroy());
+		u16 const oldFlags = FlagsRegister::get();
+        u16 const oldValue = getInstOpValue(dst);
+		u16 const newValue = execOp(format, oldValue, getInstOpValue(src));
+        setInstOpValue(dst, newValue);
+        decoder.print("; %s:0x%x->0x%x ", dstName.items, oldValue, newValue);
+		decoder.printIP(" flags:");
+		decoder.printlnFlags(oldFlags);
+	} else {
+        decoder.println("; " LOG_ERROR_STRING ": `%s <%s> <%s>` is an invalid order of types.",
+        	getMnemonic(format),
+        	Instruction_Operand_Type_Names[static_cast<u8>(dst.type)],
+        	Instruction_Operand_Type_Names[static_cast<u8>(src.type)]);
+	}
+}
 
 constexpr Common_Format FMT_ADD = {
 	Type::add,
@@ -86,6 +108,7 @@ constexpr const char* descriptionTable[] = {
 };
 
 static void decodeFormat0(Decoder_Context &decoder, u8 &byte, Common_Format const& format) {
+    // Reg/memory with register to either
 	bool const D = (byte >> 1) & 1;
 	bool const W = (byte)      & 1;
 	decoder.advance(byte);
@@ -105,6 +128,7 @@ static void decodeFormat0(Decoder_Context &decoder, u8 &byte, Common_Format cons
         dst.type = Instruction_Operand_Type::EffectiveAddress;
         dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateWord(displacement);
+		dst.address.wide = W;
 	}
 	// Memory Mode (8-bit displacement)
 	else if (MOD == 0b01) {
@@ -115,6 +139,7 @@ static void decodeFormat0(Decoder_Context &decoder, u8 &byte, Common_Format cons
         dst.type = Instruction_Operand_Type::EffectiveAddress;
         dst.address.base = Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateByte(displacement);
+		dst.address.wide = W;
 	}
 	// Memory Mode (16-bit displacement)
 	else if (MOD == 0b10) {
@@ -125,6 +150,7 @@ static void decodeFormat0(Decoder_Context &decoder, u8 &byte, Common_Format cons
         dst.type = Instruction_Operand_Type::EffectiveAddress;
         dst.address.base = Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateWord(displacement);
+		dst.address.wide = W;
 	}
 	// Register Mode (no displacement)
 	else if (MOD == 0b11) {
@@ -139,18 +165,7 @@ static void decodeFormat0(Decoder_Context &decoder, u8 &byte, Common_Format cons
 
 	decoder.printInst(getMnemonic(format), dst, src);
 	if (decoder.exec) {
-        if (dst.type == Instruction_Operand_Type::EffectiveAddress || src.type == Instruction_Operand_Type::EffectiveAddress) {
-			decoder.println("; " LOG_ERROR_STRING ": Memory Expressions are Unimplemented.");
-		} else {
-			u16 const oldDstValue = getRegisterValue(dst.reg);
-			u16 const srcValue = getRegisterValue(src.reg);
-			u16 const oldFlags = FlagsRegister::get();
-			u16 const result = execOp(format, oldDstValue, srcValue);
-			setRegisterValue(dst.reg, result);
-			decoder.print("; %s:0x%x->0x%x ", getRegisterName(dst.reg), oldDstValue, result);
-			decoder.printIP(" flags:");
-			decoder.printFlagsLN(oldFlags);
-		}
+		exec_ADD_SUB_CMP(decoder, dst, src, format);
 	} else {
 		decoder.print("; (D:%d, W:%d, ", D, W);
 		decoder.printMOD(MOD, ' ');
@@ -162,6 +177,7 @@ static void decodeFormat0(Decoder_Context &decoder, u8 &byte, Common_Format cons
 }
 
 static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format const& format) {
+    // Immediate to register/memory
 	bool const S = (byte >> 1) & 1;
 	bool const W = (byte)      & 1;
 	decoder.advance(byte);
@@ -181,6 +197,7 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 		dst.prefix = InstPrefix(W);
         dst.address.base = Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateWord(displacement);
+		dst.address.wide = W;
 	}
 	// Memory Mode (8-bit displacement)
 	else if (MOD == 0b01) {
@@ -192,6 +209,7 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 		dst.prefix = InstPrefix(W);
         dst.address.base = Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateByte(displacement);
+		dst.address.wide = W;
 	}
 	// Memory Mode (16-bit displacement)
 	else if (MOD == 0b10) {
@@ -203,6 +221,7 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 		dst.prefix = InstPrefix(W);
         dst.address.base = Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateWord(displacement);
+		dst.address.wide = W;
 	}
 	// Register Mode (no displacement)
 	else if (MOD == 0b11) {
@@ -213,17 +232,7 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 
 	decoder.printInst(getMnemonic(format), dst, src);
 	if (decoder.exec) {
-        if (dst.type == Instruction_Operand_Type::EffectiveAddress || src.type == Instruction_Operand_Type::EffectiveAddress) {
-			decoder.println("; " LOG_ERROR_STRING ": Memory Expressions are Unimplemented.");
-		} else {
-			u16 const oldDstValue = getRegisterValue(dst.reg);
-			u16 const oldFlags = FlagsRegister::get();
-			u16 const result = execOp(format, oldDstValue, src.immediate.word);
-			setRegisterValue(dst.reg, result);
-			decoder.print("; %s:0x%x->0x%x ", getRegisterName(dst.reg), oldDstValue, result);
-			decoder.printIP(" flags:");
-			decoder.printFlagsLN(oldFlags);
-		}
+		exec_ADD_SUB_CMP(decoder, dst, src, format);
 	} else {
 		decoder.print("; (W:%d, ", W);
 		decoder.printMOD(MOD, ' ');
@@ -234,16 +243,21 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 }
 
 static void decodeFormat2(Decoder_Context &decoder, u8 &byte, Common_Format const& format) {
+    // Immediate to accumulator
 	bool const W = byte & 1;
 
 	u16 const data = decoder.advance8or16Bits(W, byte);
 
 	Instruction_Operand const src = InstImmediate(W, data);
-	Instruction_Operand const dst = REG_Table[0b000][W];
+	Instruction_Operand const dst = REG_Table[RegToID(Register::a)][W];
 
 	decoder.printInst(getMnemonic(format), dst, src);
-	decoder.print("; (W:%d) <- ", W);
-	decoder.printByteStack();
+	if (decoder.exec) {
+		exec_ADD_SUB_CMP(decoder, dst, src, format);
+	} else {
+		decoder.print("; (W:%d) <- ", W);
+		decoder.printByteStack();
+	}
 }
 
 bool isByte_ADD_SUB_CMP(Decoder_Context &decoder, u8 &byte) {

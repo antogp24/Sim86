@@ -11,6 +11,71 @@
 #include "util.h"
 
 u16 gRegisterValues[RegisterCount] = {0};
+u8 gMemory[1024 * 1024] = {0};
+
+String_Builder getInstOpName(Instruction_Operand const& operand) {
+	String_Builder builder = string_builder_make();
+
+	switch (operand.type) {
+		case Instruction_Operand_Type::Register: {
+			builder.append(getRegisterName(operand.reg));
+		} break;
+
+		case Instruction_Operand_Type::EffectiveAddress: {
+			builder.append('[');
+			builder.append(EffectiveAddress::getInnerValue(operand.address));
+			builder.append(']');
+		} break;
+
+		case Instruction_Operand_Type::Immediate: {
+			if (operand.immediate.wide) {
+				builder.append(operand.immediate.word);
+			} else {
+				builder.append(operand.immediate.byte);
+			}
+		} break;
+
+		default: break;
+	}
+	return builder;
+}
+
+u16 getInstOpValue(Instruction_Operand const& operand) {
+	switch (operand.type) {
+		case Instruction_Operand_Type::Register:  return getRegisterValue(operand.reg);
+		case Instruction_Operand_Type::Immediate: return operand.immediate.word;
+
+		case Instruction_Operand_Type::EffectiveAddress: {
+			i16 const idx = EffectiveAddress::getInnerValue(operand.address);
+			if (operand.address.wide) {
+				return reinterpret_cast<u16*>(gMemory)[idx];
+			} else {
+				return gMemory[idx];
+			}
+		}
+
+		default: return 0;
+	}
+}
+
+void setInstOpValue(Instruction_Operand const& operand, u16 const value) {
+	switch (operand.type) {
+		case Instruction_Operand_Type::Register: {
+			setRegisterValue(operand.reg, value);
+		} break;
+
+		case Instruction_Operand_Type::EffectiveAddress: {
+			i16 const idx = EffectiveAddress::getInnerValue(operand.address);
+			if (operand.address.wide) {
+				reinterpret_cast<u16*>(gMemory)[idx] = value;
+			} else {
+				gMemory[idx] = value;
+			}
+		}
+
+		default: /* error */ break;
+	}
+}
 
 namespace FlagsRegister {
 	void setBit(Bit const& bit, bool const value) {
@@ -72,69 +137,6 @@ namespace FlagsRegister {
     }
 }
 
-static force_inline RegisterUsage getGeneralPurposeRegisterUsage(const char* reg) {
-	switch (reg[1]) {
-	case 'x': return RegisterUsage::x;
-	case 'l': return RegisterUsage::l;
-	case 'h': return RegisterUsage::h;
-	default: unreachable();
-	}
-}
-
-static force_inline bool isRegisterGeneralPurpose(RegisterInfo const& reg) {
-	return reg.type == Register::a ||
-	       reg.type == Register::b ||
-	       reg.type == Register::c ||
-	       reg.type == Register::d;
-}
-
-static force_inline bool isRegisterGeneralPurpose(const char* reg) {
-	return  0 == strncmp(reg, "ax", 2) ||
-			0 == strncmp(reg, "al", 2) ||
-			0 == strncmp(reg, "ah", 2) ||
-			0 == strncmp(reg, "bx", 2) ||
-			0 == strncmp(reg, "bl", 2) ||
-			0 == strncmp(reg, "bh", 2) ||
-			0 == strncmp(reg, "cx", 2) ||
-			0 == strncmp(reg, "cl", 2) ||
-			0 == strncmp(reg, "ch", 2) ||
-			0 == strncmp(reg, "dx", 2) ||
-			0 == strncmp(reg, "dl", 2) ||
-			0 == strncmp(reg, "dh", 2);
-}
-
-RegisterInfo getRegisterInfo(const char* reg) {
-	assertTrue(strlen(reg) == 2);
-	RegisterInfo info = {.usage = RegisterUsage::x};
-	if (isRegisterGeneralPurpose(reg)) {
-		info.type = IDToReg(reg[0]-'a');
-		info.usage = getGeneralPurposeRegisterUsage(reg);
-	} else if (0 == strncmp(reg, "sp", 2)) {
-		info.type = Register::sp;
-	} else if (0 == strncmp(reg, "bp", 2)) {
-		info.type = Register::bp;
-	} else if (0 == strncmp(reg, "si", 2)) {
-		info.type = Register::si;
-	} else if (0 == strncmp(reg, "di", 2)) {
-		info.type = Register::di;
-	} else if (0 == strncmp(reg, "cs", 2)) {
-		info.type = Register::cs;
-	} else if (0 == strncmp(reg, "ds", 2)) {
-		info.type = Register::ds;
-	} else if (0 == strncmp(reg, "ss", 2)) {
-		info.type = Register::ss;
-	} else if (0 == strncmp(reg, "es", 2)) {
-		info.type = Register::es;
-	} else if (0 == strncmp(reg, "ip", 2)) {
-		info.type = Register::ip;
-	} else if (0 == strncmp(reg, "fl", 2)) {
-		info.type = Register::fl;
-	} else {
-		panic("Invalid register '%s'", reg);
-	}
-	return info;
-}
-
 u16 getRegisterValue(RegisterInfo const& reg) {
 	u8 const idx = RegToID(reg.type);
 	switch (reg.usage) {
@@ -156,124 +158,190 @@ void setRegisterValue(RegisterInfo const& reg, u16 const value) {
 }
 
 const char* getRegisterName(RegisterInfo const& reg) {
+	u8 const idx = RegToID(reg.type);
 	switch (reg.type) {
-		case Register::a: {
+		case Register::a: case Register::b:
+		case Register::c: case Register::d:
 			switch (reg.usage) {
-				case RegisterUsage::x: return "ax";
-				case RegisterUsage::l: return "al";
-				case RegisterUsage::h: return "ah";
+				case RegisterUsage::x: return RegisterNames[idx];
+				case RegisterUsage::h: return RegisterExtraNames[2*idx+0];
+				case RegisterUsage::l: return RegisterExtraNames[2*idx+1];
                 default: return nullptr;
 			}
-		}
-        case Register::b: {
-			switch (reg.usage) {
-				case RegisterUsage::x: return "bx";
-				case RegisterUsage::l: return "bl";
-				case RegisterUsage::h: return "bh";
-                default: return nullptr;
-			}
-		}
-        case Register::c: {
-			switch (reg.usage) {
-				case RegisterUsage::x: return "cx";
-				case RegisterUsage::l: return "cl";
-				case RegisterUsage::h: return "ch";
-                default: return nullptr;
-			}
-		}
-        case Register::d: {
-			switch (reg.usage) {
-				case RegisterUsage::x: return "dx";
-				case RegisterUsage::l: return "dl";
-				case RegisterUsage::h: return "dh";
-                default: return nullptr;
-			}
-		}
-        case Register::sp: return "sp"; case Register::bp: return "bp";
-        case Register::si: return "si"; case Register::di: return "di";
-        case Register::cs: return "cs"; case Register::ds: return "ds";
-        case Register::ss: return "ss"; case Register::es: return "es";
-        case Register::ip: return "ip"; case Register::fl: return "fl";
+        case Register::sp: case Register::bp:
+        case Register::si: case Register::di:
+        case Register::cs: case Register::ds:
+        case Register::ss: case Register::es:
+        case Register::ip: case Register::fl:
+			return RegisterNames[idx];
         default: return nullptr;
 	}
 }
-
 
 namespace EffectiveAddress {
     const char* base2string(Base const base) {
     	switch (base) {
             case Base::Direct: return "";
-            case Base::bx_si: return "bx + si";
-            case Base::bx_di: return "bx + di";
-            case Base::bp_si: return "bp + si";
-            case Base::bp_di: return "bp + di";
-            case Base::si: return "si";
-            case Base::di: return "di";
-            case Base::bp: return "bp";
-            case Base::bx: return "bx";
+            case Base::bx_si:  return "bx + si";
+            case Base::bx_di:  return "bx + di";
+            case Base::bp_si:  return "bp + si";
+            case Base::bp_di:  return "bp + di";
+            case Base::si:     return "si";
+            case Base::di:     return "di";
+            case Base::bp:     return "bp";
+            case Base::bx:     return "bx";
             default: return nullptr;
     	}
     }
+
+	i16 getInnerValue(Info const& info) {
+    	i16 result;
+    	switch (info.base) {
+			case Base::bx_si: result = static_cast<i16>(getRegisterValue(RegX(b))  + getRegisterValue(RegX(si))); break;
+			case Base::bx_di: result = static_cast<i16>(getRegisterValue(RegX(b))  + getRegisterValue(RegX(di))); break;
+			case Base::bp_si: result = static_cast<i16>(getRegisterValue(RegX(bp)) + getRegisterValue(RegX(si))); break;
+			case Base::bp_di: result = static_cast<i16>(getRegisterValue(RegX(bp)) + getRegisterValue(RegX(di))); break;
+			case Base::si:    result = static_cast<i16>(getRegisterValue(RegX(si))); break;
+			case Base::di:    result = static_cast<i16>(getRegisterValue(RegX(di))); break;
+			case Base::bp:    result = static_cast<i16>(getRegisterValue(RegX(bp))); break;
+			case Base::bx:    result = static_cast<i16>(getRegisterValue(RegX(b)));  break;
+			case Base::Direct: default: result = 0;
+    	}
+    	if (info.displacement.wide) {
+    		result += info.displacement.word;
+    	} else {
+    		result += info.displacement.byte;
+    	}
+    	return result;
+    }
+}
+int Decoder_Context::printEffectiveAddressBase(EffectiveAddress::Base const base) const {
+	using namespace EffectiveAddress;
+	if (outFile == stdout) {
+		switch (base) {
+			case Base::Direct: return 0;
+			#define X(R) REGISTER_COLOR R ASCII_COLOR_END
+			case Base::bx_si: print(X("bx") " + " X("si")); return sizeof("?? + ??")-1;
+			case Base::bx_di: print(X("bx") " + " X("di")); return sizeof("?? + ??")-1;
+			case Base::bp_si: print(X("bp") " + " X("si")); return sizeof("?? + ??")-1;
+			case Base::bp_di: print(X("bp") " + " X("di")); return sizeof("?? + ??")-1;
+			#undef X
+
+			case Base::si: case Base::di: case Base::bp: case Base::bx: {
+				print(REGISTER_COLOR);
+				int const n = _print(base2string(base));
+				print(ASCII_COLOR_END);
+				return n;
+			}
+
+			default: return 0;
+		}
+	}
+	return _print(base2string(base));
 }
 
-String_Builder operand2string(Instruction_Operand const& operand) {
-    String_Builder builder = string_builder_make();
+int Decoder_Context::printInstOperand(Instruction_Operand const& operand) const {
+	if (operand.type == Instruction_Operand_Type::None) return 0;
+	int n = 0;
 
 	switch (operand.prefix) {
-        case Instruction_Operand_Prefix::Byte: builder.append("byte "); break;
-        case Instruction_Operand_Prefix::Word: builder.append("word "); break;
+        case Instruction_Operand_Prefix::Byte:
+        case Instruction_Operand_Prefix::Word:
+			if (outFile == stdout) print(INST_PREFIX_COLOR);
+			n+=_print("%s ", InstOpPrefixName[static_cast<u8>(operand.prefix)]);
+			if (outFile == stdout) print(ASCII_COLOR_END);
+			break;
         case Instruction_Operand_Prefix::None: default: break;
 	}
 
 	switch (operand.type) {
         case Instruction_Operand_Type::Immediate: {
+        	if (outFile == stdout) print(NUMBER_COLOR);
         	if (operand.immediate.wide) {
-        		builder.append(operand.immediate.word);
+        		n+=_print("%" PRIi16, operand.immediate.word);
         	} else {
-        		builder.append(operand.immediate.byte);
+        		n+=_print("%" PRIi8, operand.immediate.byte);
         	}
+        	if (outFile == stdout) print(ASCII_COLOR_END);
         } break;
 
         case Instruction_Operand_Type::Register: {
-        	builder.append(getRegisterName(operand.reg));
+        	if (outFile == stdout) print(REGISTER_COLOR);
+			n+=_print(getRegisterName(operand.reg));
+        	if (outFile == stdout) print(ASCII_COLOR_END);
         } break;
 
         case Instruction_Operand_Type::EffectiveAddress: {
-			builder.append('[');
+			fputc('[', outFile); n++;
         	bool const hasBase = operand.address.base != EffectiveAddress::Base::Direct;
         	if (hasBase) {
-                builder.append(EffectiveAddress::base2string(operand.address.base));
+        		n += printEffectiveAddressBase(operand.address.base);
         	}
         	if (operand.address.displacement.wide) {
                 if (operand.address.displacement.word > 0) {
-                    builder.append(hasBase ? " + " : "");
-                    builder.append(operand.address.displacement.word);
+					if (hasBase) n+=_print(" + ");
+					if (outFile == stdout) print(NUMBER_COLOR);
+					n+=_print("%" PRIi16, operand.address.displacement.word);
+					if (outFile == stdout) print(ASCII_COLOR_END);
                 } else if (operand.address.displacement.word < 0) {
-                    builder.append(hasBase ? " - " : "-");
-                    builder.append(-operand.address.displacement.word);
+					n+=_print(hasBase ? " - " : "-");
+					if (outFile == stdout) print(NUMBER_COLOR);
+					n+=_print("%" PRIi16, -operand.address.displacement.word);
+					if (outFile == stdout) print(ASCII_COLOR_END);
                 }
         	} else {
                 if (operand.address.displacement.byte > 0) {
-                    builder.append(hasBase ? " + " : "");
-                    builder.append(operand.address.displacement.byte);
+					if (hasBase) n+=_print(" + ");
+					if (outFile == stdout) print(NUMBER_COLOR);
+					n+=_print("%" PRIi8, operand.address.displacement.byte);
+					if (outFile == stdout) print(ASCII_COLOR_END);
                 } else if (operand.address.displacement.byte < 0) {
-                    builder.append(hasBase ? " - " : "-");
-                    builder.append(-operand.address.displacement.byte);
+					n+=_print(hasBase ? " - " : "-");
+					if (outFile == stdout) print(NUMBER_COLOR);
+					n+=_print("%" PRIi16, -operand.address.displacement.byte);
+					if (outFile == stdout) print(ASCII_COLOR_END);
                 }
         	}
-			builder.append(']');
+			fputc(']', outFile); n++;
         } break;
+
+		case Instruction_Operand_Type::Jump: {
+			// The offset gets added 2 because the jump instructions take up 2 bytes.
+			i8 const disp = static_cast<i8>(operand.jump.offset + 2);
+			if (disp > 0) {
+				n+=_print("$+");
+				if (outFile == stdout) print(NUMBER_COLOR);
+				n+=_print("%" PRIi8, disp);
+				if (outFile == stdout) print(ASCII_COLOR_END);
+				n+=_print("+");
+				if (outFile == stdout) print(NUMBER_COLOR);
+				n+=_print("%" PRIi8, 0);
+				if (outFile == stdout) print(ASCII_COLOR_END);
+			} else if (disp < 0) {
+				n+=_print("$-");
+				if (outFile == stdout) print(NUMBER_COLOR);
+				n+=_print("%" PRIi8, -disp);
+				if (outFile == stdout) print(ASCII_COLOR_END);
+				n+=_print("+");
+				if (outFile == stdout) print(NUMBER_COLOR);
+				n+=_print("%" PRIi8, 0);
+				if (outFile == stdout) print(ASCII_COLOR_END);
+			} else {
+				n+=_print("$+");
+				if (outFile == stdout) print(NUMBER_COLOR);
+				n+=_print("%" PRIi8, 0);
+				if (outFile == stdout) print(ASCII_COLOR_END);
+			}
+		} break;
 
         default: unreachable();
 	}
-    return builder;
+	return n;
 }
 
 bool decodeOrSimulate(FILE* outFile, Slice<u8> const binaryBytes, bool const exec) {
 	Decoder_Context decoder(outFile, binaryBytes, exec);
-	if (!exec) {
-		decoder.println("bits 16");
-	}
+	decoder.printBitsHeader();
 
 	while (decoder.bytesRead < binaryBytes.count) {
 		u8 byte; decoder.advance(byte);
@@ -305,14 +373,14 @@ bool decodeOrSimulate(FILE* outFile, Slice<u8> const binaryBytes, bool const exe
 	return true;
 }
 
-void printBits(FILE* outFile, u8 byte, int count) {
+void printBits(FILE* outFile, u8 const byte, int const count) {
 	assertTrue(count >= 1 && count <= 8);
 	for (int i = count - 1; i >= 0; i--) {
 		fprintf(outFile, "%d", (byte >> i) & 1);
 	}
 }
 
-void printBits(FILE* outFile, u8 byte, int count, char ending) {
+void printBits(FILE* outFile, u8 const byte, int const count, char const ending) {
 	printBits(outFile, byte, count);
 	fputc(ending, outFile);
 }

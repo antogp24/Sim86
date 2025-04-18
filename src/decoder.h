@@ -4,8 +4,13 @@
 #include "string_builder.h"
 #include <cstdarg>
 
-#define INSTRUCTION_LINE_SIZE 32
-#define INSTRUCTION_FMT "%-" XStringify(INSTRUCTION_LINE_SIZE) "s"
+#define INSTRUCTION_LINE_SIZE 30
+
+#define COMMENT_COLOR      ASCII_COLOR_GREEN
+#define MNEMONIC_COLOR     ASCII_COLOR_B_RED
+#define NUMBER_COLOR       ASCII_COLOR_CYAN
+#define INST_PREFIX_COLOR  ASCII_COLOR_MAGENTA
+#define REGISTER_COLOR     ASCII_COLOR_YELLOW
 
 #define MAX_BYTES_PER_INSTRUCTION_8086 6
 struct Byte_Stack_8086 {
@@ -19,6 +24,7 @@ enum struct Register : u8 {
 };
 static_assert(static_cast<u8>(Register::Count) == 0b1110);
 
+#define RegX(R) RegisterInfo{.type=Register::R, .usage=RegisterUsage::x}
 #define IDToReg(reg) static_cast<Register>(reg)
 #define RegToID(reg) static_cast<u8>(reg)
 #define RegisterCount RegToID(Register::Count)
@@ -33,7 +39,6 @@ struct RegisterInfo {
 u16 getRegisterValue(RegisterInfo const& reg);
 void setRegisterValue(RegisterInfo const& reg, u16 value);
 const char* getRegisterName(RegisterInfo const& reg);
-RegisterInfo getRegisterInfo(const char* reg);
 
 struct Immediate {
     union {
@@ -59,32 +64,106 @@ namespace EffectiveAddress {
 	struct Info {
 		Base base;
 		Immediate displacement;
+		bool wide;
 	};
-	const char* base2string(Base base);
+    const char* base2string(Base base);
+	i16 getInnerValue(Info const& info);
 }
+
+namespace Jumps {
+	enum struct Type : u8 {
+		jo = 112,     // 0b01110000 = 112
+		jno,          // 0b01110001 = 113
+		jb,           // 0b01110010 = 114
+		jnb,          // 0b01110011 = 115
+		je,           // 0b01110100 = 116
+		jne,          // 0b01110101 = 117
+		jbe,          // 0b01110110 = 118
+		ja,           // 0b01110111 = 119
+		js,           // 0b01111000 = 120
+		jns,          // 0b01111001 = 121
+		jp,           // 0b01111010 = 122
+		jnp,          // 0b01111011 = 123
+		jl,           // 0b01111100 = 124
+		jnl,          // 0b01111101 = 125
+		jle,          // 0b01111110 = 126
+		jg,           // 0b01111111 = 127
+		loop = 224,   // 0b11100010 = 224
+		loopz,        // 0b11100001 = 225
+		loopnz,       // 0b11100000 = 226
+		jcxz,         // 0b11100011 = 227
+	};
+
+	#define ByteToJumpType(byte) static_cast<Jumps::Type>(byte)
+
+	struct Info {
+		Type type;
+		i8 offset;
+	};
+
+	enum struct Outcome { error, jumped, stayed };
+
+	const char* getMnemonic(Type type);
+	const char* getOutcomeName(Outcome outcome);
+}
+
+enum struct Instruction_Operand_Prefix : u8 { None = 0, Byte, Word };
+constexpr const char* InstOpPrefixName[3] = { "", "byte", "word"};
 
 enum struct Instruction_Operand_Type : u8 {
 	None = 0,
 	Immediate,
 	Register,
 	EffectiveAddress,
+	Jump,
 };
 
-enum struct Instruction_Operand_Prefix : u8 { None = 0, Byte, Word };
+#define X(x) [static_cast<u8>(Instruction_Operand_Type::x)] = #x
+constexpr const char* Instruction_Operand_Type_Names[] = {
+	X(None), X(Immediate), X(Register), X(EffectiveAddress), X(Jump),
+};
+#undef X
 
 struct Instruction_Operand {
 	union {
 		RegisterInfo reg;
 		EffectiveAddress::Info address;
 		Immediate immediate;
+		Jumps::Info jump;
 	};
-	Instruction_Operand_Type type     : 2;
+	Instruction_Operand_Type type;
 	Instruction_Operand_Prefix prefix : 2;
 };
+
+#define IsInstRegister(inst)  ((inst).type == Instruction_Operand_Type::Register)
+#define IsInstImmediate(inst) ((inst).type == Instruction_Operand_Type::Immediate)
+#define IsInstMemory(inst)    ((inst).type == Instruction_Operand_Type::EffectiveAddress)
+
+// rr: Register, []: Memory, XX: Immediate
+//
+//     1. inst rr, (rr | XX | [])
+//     2. inst [], (rr | XX)
+//
+#define IsBinaryInstTypeOrderValid(dst, src)                                                        \
+    ((IsInstRegister(dst) && (IsInstRegister(src) || IsInstImmediate(src) || IsInstMemory(src))) || \
+     (IsInstMemory(dst)   && (IsInstRegister(src) || IsInstImmediate(src))))
+
+String_Builder getInstOpName(Instruction_Operand const& operand);
+u16  getInstOpValue(Instruction_Operand const& operand);
+void setInstOpValue(Instruction_Operand const& operand, u16 value);
 
 #define InstPrefix(Wide)                       \
 	((Wide) ? Instruction_Operand_Prefix::Word \
             : Instruction_Operand_Prefix::Byte)
+
+#define InstJump(typeByte, data) Instruction_Operand{ \
+	.jump=Jumps::Info{                                \
+		.type=ByteToJumpType(typeByte),               \
+		.offset=signExtendByte(data),                 \
+	},                                                \
+	.type = Instruction_Operand_Type::Jump,           \
+	.prefix = Instruction_Operand_Prefix::None        \
+}
 
 #define InstImmediateByte(Byte) Instruction_Operand{ \
 	.immediate = Immediate{.byte=Byte, .wide=0},     \
@@ -120,8 +199,6 @@ struct Instruction_Operand {
 	.type = Instruction_Operand_Type::Register,                \
 }
 
-String_Builder operand2string(Instruction_Operand const& operand);
-
 namespace FlagsRegister {
     enum struct Bit : u16 { CF = 0, PF = 2, AF = 4, ZF = 6, SF, OF, IF, DF, TF};
     constexpr Bit BitList[] = { Bit::CF, Bit::PF, Bit::AF, Bit::ZF, Bit::SF, Bit::OF, Bit::IF, Bit::DF, Bit::TF };
@@ -136,18 +213,6 @@ namespace FlagsRegister {
 }
 
 // Expects to be indexed as [REG][W] or as [R/M][W]
-constexpr const char* REG_TABLE[8][2] = {
-	[0b000] = {"al", "ax"},
-	[0b001] = {"cl", "cx"},
-	[0b010] = {"dl", "dx"},
-	[0b011] = {"bl", "bx"},
-	[0b100] = {"ah", "sp"},
-	[0b101] = {"ch", "bp"},
-	[0b110] = {"dh", "si"},
-	[0b111] = {"bh", "di"},
-};
-
-// Expects to be indexed as [REG][W] or as [R/M][W]
 constexpr Instruction_Operand REG_Table[8][2] = {
 	[0b000] = {InstGeneralReg(a,l), InstGeneralReg(a,x)},
 	[0b001] = {InstGeneralReg(c,l), InstGeneralReg(c,x)},
@@ -160,31 +225,11 @@ constexpr Instruction_Operand REG_Table[8][2] = {
 };
 
 // Expects to be indexed as [SR]
-constexpr const char* SR_TABLE[4] = {
-	[0b00] = "es",
-	[0b01] = "cs",
-	[0b10] = "ss",
-	[0b11] = "ds",
-};
-
-// Expects to be indexed as [SR]
 constexpr Instruction_Operand SR_Table[4] = {
 	[0b00] = InstNonGeneralReg(es),
 	[0b01] = InstNonGeneralReg(cs),
 	[0b10] = InstNonGeneralReg(ss),
 	[0b11] = InstNonGeneralReg(ds),
-};
-
-// Expects to be indexed as [R/M]
-constexpr const char* EFFECTIVE_ADDRESS_TABLE[8] = {
-	[0b000] = "bx + si",
-	[0b001] = "bx + di",
-	[0b010] = "bp + si",
-	[0b011] = "bp + di",
-	[0b100] = "si",
-	[0b101] = "di",
-	[0b110] = "bp",      // DIRECT ADDRESS if MOD = 00
-	[0b111] = "bx",
 };
 
 // Expects to be indexed as [R/M]
@@ -199,12 +244,31 @@ constexpr EffectiveAddress::Base Effective_Address_Table[8] = {
 	[0b111] = EffectiveAddress::Base::bx,
 };
 
-constexpr const char* registerNames[RegisterCount] = {
-	"ax", "bx", "cx", "dx", "sp", "bp", "si", "di", "cs",
-	"ds", "ss", "es", "ip", "fl",
+#define X(R) [RegToID(Register::R)] = RegX(R)
+constexpr RegisterInfo RegisterList[RegisterCount] = {
+	X(a),  X(b),  X(c),  X(d),  X(sp), X(bp), X(si),
+	X(di), X(cs), X(ds), X(ss), X(es), X(ip), X(fl),
+};
+#undef X
+
+constexpr const char* RegisterNames[RegisterCount] = {
+	[RegToID(Register::a)] = "ax",  [RegToID(Register::b)] = "bx",
+	[RegToID(Register::c)] = "cx",  [RegToID(Register::d)] = "dx",
+	[RegToID(Register::sp)] = "sp", [RegToID(Register::bp)] = "bp",
+	[RegToID(Register::si)] = "si", [RegToID(Register::di)] = "di",
+	[RegToID(Register::cs)] = "cs", [RegToID(Register::ds)] = "ds",
+	[RegToID(Register::ss)] = "ss", [RegToID(Register::es)] = "es",
+	[RegToID(Register::ip)] = "ip", [RegToID(Register::fl)] = "fl",
 };
 
-constexpr const char* registerFullNames[RegisterCount] = {
+constexpr const char* RegisterExtraNames[8] = {
+	[0] = "ah", [1] = "al",
+	[2] = "bh", [3] = "bl",
+	[4] = "ch", [5] = "cl",
+	[6] = "dh", [7] = "dl",
+};
+
+constexpr const char* RegisterFullNames[RegisterCount] = {
 	"Accumulator", "Base", "Count", "Data", "Stack Pointer",
 	"Base Pointer", "Source Index", "Destination Index",
 	"Code Segment", "Data Segment", "Stack Segment",
@@ -212,9 +276,9 @@ constexpr const char* registerFullNames[RegisterCount] = {
 };
 
 extern u16 gRegisterValues[RegisterCount];
+extern u8 gMemory[1024 * 1024];
 
 Register getReg(const char* reg);
-#define getRegFullName(reg) registerFullNames[RegToID(reg)]
 
 force_inline inline void incrementIP(i16 const value) {
 	RegisterInfo constexpr ip = {Register::ip, RegisterUsage::x};
@@ -225,7 +289,6 @@ force_inline inline void incrementIP(i16 const value) {
 force_inline inline u16 getIP() {
 	return gRegisterValues[RegToID(Register::ip)];
 }
-
 
 bool decodeOrSimulate(FILE* outFile, Slice<u8> binaryBytes, bool exec);
 void printBits(FILE* outFile, u8 byte, int count);
@@ -318,12 +381,19 @@ struct Decoder_Context {
 		printBits(outFile, R_M, 3, ending);
 	}
 
-	void printFlagsLN(u16 const oldFlags) const {
+	void printlnFlags(u16 const oldFlags) const {
 		FlagsRegister::printSet(outFile, oldFlags);
 		print("->");
 		FlagsRegister::printSet(outFile);
 		fputc('\n', outFile);
+		if (outFile == stdout) print(ASCII_COLOR_END);
 	}
+
+	void printlnIP() const {
+		printIP();
+		fputc('\n', outFile);
+		if (outFile == stdout) print(ASCII_COLOR_END);
+    }
 
 	void printIP(char const* ending) const {
 		printIP();
@@ -336,12 +406,12 @@ struct Decoder_Context {
     }
 
 	void printRegistersLN() const {
-		for (const char* name: registerNames) {
-			u16 const value = getRegisterValue(getRegisterInfo(name));
-			if (value == 0) {
-				continue;
-			}
-			if (0 == strcmp(name, "fl")) {
+		for (size_t i = 0; i < RegisterCount; i++) {
+			RegisterInfo const reg = RegisterList[i];
+			const char* name = RegisterNames[i];
+			u16 const value = getRegisterValue(reg);
+			if (value == 0) continue;
+			if (reg.type == Register::fl) {
 				print("%8s: ", "flags", value, value);
 				FlagsRegister::printSet(outFile);
 				fputc('\n', outFile);
@@ -351,11 +421,22 @@ struct Decoder_Context {
 		}
 	}
 
+	[[nodiscard]] int printEffectiveAddressBase(EffectiveAddress::Base base) const;
+	[[nodiscard]] int printInstOperand(Instruction_Operand const& operand) const;
+
 	void print(const char* fmt, ...) const {
 		va_list args;
 		va_start(args, fmt);
 		vfprintf(outFile, fmt, args);
 		va_end(args);
+	}
+
+	int _print(const char* fmt, ...) const {
+		va_list args;
+		va_start(args, fmt);
+		int const n = vfprintf(outFile, fmt, args);
+		va_end(args);
+		return n;
 	}
 
 	void println(const char* fmt, ...) const {
@@ -366,40 +447,44 @@ struct Decoder_Context {
 		va_end(args);
 	}
 
+	void printBitsHeader() const {
+		if (!exec) {
+			if (outFile == stdout) {
+				println(MNEMONIC_COLOR "bits" ASCII_COLOR_END " " NUMBER_COLOR "16" ASCII_COLOR_END);
+			} else {
+				println("bits 16");
+			}
+		}
+	}
+
 	void printInst(const char* mnemonic, Instruction_Operand const& dst, Instruction_Operand const& src) const {
-		char instruction[INSTRUCTION_LINE_SIZE+1] = {0};
-		auto builderDst = operand2string(dst);
-		auto builderSrc = operand2string(src);
-		snprintf(instruction, sizeof(instruction), "%s %s, %s", mnemonic, builderDst.items, builderSrc.items);
-		print(INSTRUCTION_FMT" ", instruction);
-		builderDst.destroy();
-		builderSrc.destroy();
+		int n = 0;
+		if (outFile == stdout) print(MNEMONIC_COLOR);
+		n += _print("%s ", mnemonic);
+		if (outFile == stdout) print(ASCII_COLOR_END);
+		n += printInstOperand(dst);
+		if (src.type != Instruction_Operand_Type::None) {
+			n += _print(", ");
+			n += printInstOperand(src);
+		}
+		n ++; fputc(' ', outFile);
+		for (int i = 0; i < INSTRUCTION_LINE_SIZE-n; i++) {
+			fputc(' ', outFile);
+		}
+		if (outFile == stdout) print(COMMENT_COLOR);
 	}
 
 	void printInst(const char* mnemonic, Instruction_Operand const& operand) const {
-		char instruction[INSTRUCTION_LINE_SIZE+1] = {0};
-		auto builder = operand2string(operand);
-		snprintf(instruction, sizeof(instruction), "%s %s", mnemonic, builder.items);
-		print(INSTRUCTION_FMT" ", instruction);
-		builder.destroy();
-	}
-
-	void printInst(const char* mnemonic, const char* dst, const char* src) const {
-		char instruction[INSTRUCTION_LINE_SIZE+1] = {0};
-		snprintf(instruction, sizeof(instruction), "%s %s, %s", mnemonic, dst, src);
-		print(INSTRUCTION_FMT" ", instruction);
-	}
-
-	void printInst(const char* mnemonic, const char* operand) const {
-		char instruction[INSTRUCTION_LINE_SIZE+1] = {0};
-		snprintf(instruction, sizeof(instruction), "%s %s", mnemonic, operand);
-		print(INSTRUCTION_FMT" ", instruction);
+		printInst(mnemonic, operand, Instruction_Operand{.type=Instruction_Operand_Type::None});
 	}
 
 	void printByteStack() const {
 		for (size_t i = 0; i < byteStack.count; i++) {
-			printBits(outFile, byteStack.items[i], 8, i < byteStack.count-1 ? ' ' : '\n');
+			if (i > 0) fputc(' ', outFile);
+			printBits(outFile, byteStack.items[i], 8);
 		}
+		if (outFile == stdout) print(ASCII_COLOR_END);
+		fputc('\n', outFile);
 	}
 
 	void resetByteStack() {
