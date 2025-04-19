@@ -157,6 +157,11 @@ void setRegisterValue(RegisterInfo const& reg, u16 const value) {
 	}
 }
 
+void incrementRegister(RegisterInfo const& reg, i16 const increment) {
+	u16 const old = getRegisterValue(reg);
+	setRegisterValue(reg, old + increment);
+}
+
 const char* getRegisterName(RegisterInfo const& reg) {
 	u8 const idx = RegToID(reg.type);
 	switch (reg.type) {
@@ -342,6 +347,9 @@ int Decoder_Context::printInstOperand(Instruction_Operand const& operand) const 
 bool decodeOrSimulate(FILE* outFile, Slice<u8> const binaryBytes, bool const exec) {
 	Decoder_Context decoder(outFile, binaryBytes, exec);
 	decoder.printBitsHeader();
+
+	memset(gMemory, 0, sizeof(gMemory));
+	memset(gRegisterValues, 0, sizeof(gRegisterValues));
 
 	while (decoder.bytesRead < binaryBytes.count) {
 		u8 byte; decoder.advance(byte);

@@ -72,15 +72,15 @@ typedef unsigned int uint;
 
 // Constants of enough size to make a string of an integer
 // ------------------------------------------------------------------------------------------------------ //
-#define I8_STR_SIZE_BASE10  ArrayCount(I8_MIN_STR_BASE10)
-#define I16_STR_SIZE_BASE10 ArrayCount(I16_MIN_STR_BASE10)
-#define I32_STR_SIZE_BASE10 ArrayCount(I32_MIN_STR_BASE10)
-#define I64_STR_SIZE_BASE10 ArrayCount(I64_MIN_STR_BASE10)
+#define I8_STR_SIZE_BASE10  std::size(I8_MIN_STR_BASE10)
+#define I16_STR_SIZE_BASE10 std::size(I16_MIN_STR_BASE10)
+#define I32_STR_SIZE_BASE10 std::size(I32_MIN_STR_BASE10)
+#define I64_STR_SIZE_BASE10 std::size(I64_MIN_STR_BASE10)
 
-#define U8_STR_SIZE_BASE10  ArrayCount(U8_MAX_STR_BASE10)
-#define U16_STR_SIZE_BASE10 ArrayCount(U16_MAX_STR_BASE10)
-#define U32_STR_SIZE_BASE10 ArrayCount(U32_MAX_STR_BASE10)
-#define U64_STR_SIZE_BASE10 ArrayCount(U64_MAX_STR_BASE10)
+#define U8_STR_SIZE_BASE10  std::size(U8_MAX_STR_BASE10)
+#define U16_STR_SIZE_BASE10 std::size(U16_MAX_STR_BASE10)
+#define U32_STR_SIZE_BASE10 std::size(U32_MAX_STR_BASE10)
+#define U64_STR_SIZE_BASE10 std::size(U64_MAX_STR_BASE10)
 
 // Convenient Macros
 // ------------------------------------------------------------------------------------------------------ //
@@ -89,8 +89,7 @@ typedef unsigned int uint;
 #define eprintfln(fmt, ...)    fprintf(stderr, fmt"\n", ##__VA_ARGS__)
 #define   eprintf(fmt, ...)    fprintf(stderr, fmt,     ##__VA_ARGS__)
 
-#define ArrayCount(array) (sizeof(array)/sizeof(*array))
-#define StrLen(str) (ArrayCount(str)-1)
+#define StrLen(str) (std::size(str)-1)
 #define cast(T) (T)
 #define Swap(T, a, b) do { T t = a; a = b; b = t; } while(0)
 #define Unused(x) (void)x
@@ -171,7 +170,7 @@ typedef unsigned int uint;
 
 #define PtrBaseType(ptr) cppRemoveReference<decltype(*ptr)>::Type
 #define PtrToSlice(ptr, size) Slice<PtrBaseType(ptr)>(ptr, size)
-#define ArrayToSlice(array) Slice<PtrBaseType(array)>(array, ArrayCount(array))
+#define ArrayToSlice(array) Slice<PtrBaseType(array)>(array, std::size(array))
 #define StdVectorToSlice(v) Slice<PtrBaseType(v.data())>(v.data(), v.size())
 
 template <typename T>

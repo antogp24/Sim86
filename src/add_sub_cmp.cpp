@@ -25,14 +25,14 @@ static const char* getMnemonic(Common_Format const& format) {
 	}
 }
 
-static force_inline u8 Count1s(u8 const byte) {
+static u8 Count1s(u8 const byte) {
 	return ((byte >> 0) & 0b1) + ((byte >> 1) & 0b1) +
            ((byte >> 2) & 0b1) + ((byte >> 3) & 0b1) +
            ((byte >> 4) & 0b1) + ((byte >> 5) & 0b1) +
 	       ((byte >> 6) & 0b1) + ((byte >> 7) & 0b1);
 }
 
-static force_inline void setFlagsFromResult(u16 const result) {
+static void setFlagsFromResult(u16 const result) {
 	using namespace FlagsRegister;
 	setBit(Bit::ZF, result == 0);
 	setBit(Bit::PF, Count1s(result & 0xFF) % 2 == 0);

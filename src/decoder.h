@@ -38,6 +38,7 @@ struct RegisterInfo {
 
 u16 getRegisterValue(RegisterInfo const& reg);
 void setRegisterValue(RegisterInfo const& reg, u16 value);
+void incrementRegister(RegisterInfo const& reg, i16 increment);
 const char* getRegisterName(RegisterInfo const& reg);
 
 struct Immediate {
@@ -281,9 +282,7 @@ extern u8 gMemory[1024 * 1024];
 Register getReg(const char* reg);
 
 force_inline inline void incrementIP(i16 const value) {
-	RegisterInfo constexpr ip = {Register::ip, RegisterUsage::x};
-	u16 const old = getRegisterValue(ip);
-    setRegisterValue(ip, old + value);
+	incrementRegister(RegX(ip), value);
 }
 
 force_inline inline u16 getIP() {

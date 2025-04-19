@@ -122,8 +122,9 @@ struct Cmd_Args {
 	const char* asmSubstr = nullptr;
 	bool exec = false;
 	bool test = false;
+	bool dump = false;
 
-	explicit Cmd_Args(int argc, char** argv) {
+	explicit Cmd_Args(int const argc, char** argv) {
 		std::vector<const char*> nonFlags = {};
 		for (int i = 1; i < argc; i++) {
 			const char* opt = argv[i];
@@ -134,6 +135,8 @@ struct Cmd_Args {
 				exec = true;
 			} else if (0 == strcmp(opt, "-test")) {
 				test = true;
+			} else if (0 == strcmp(opt, "-dump")) {
+				dump = true;
 			} else if (0 == strcmp(opt, "-d")) {
 				if (arg == nullptr) {
 					usage(stderr, argv[0]);
@@ -162,6 +165,10 @@ struct Cmd_Args {
 		}
 		if (exec && test) {
 			eprintfln(LOG_ERROR_STRING": Can not provide the flags '-exec' and '-test' at the same time.");
+			usage(stderr, argv[0]);
+		}
+		if (dump && !exec) {
+			eprintfln(LOG_ERROR_STRING": The flag `-dump` requires the flag `-exec`");
 			usage(stderr, argv[0]);
 		}
 	}
@@ -215,7 +222,7 @@ void printProcessingHeader(const char* path) {
 	header.append(path);
 	header.append(ASCII_COLOR_END"\n");
 	printf(header.items);
-	size_t actualHeaderLen = header.len - ASCII_COLOR_byteCount(header.items) - StrLen("\n");
+	size_t const actualHeaderLen = header.len - ASCII_COLOR_byteCount(header.items) - StrLen("\n");
 	for (size_t i = 0; i < actualHeaderLen; i++) {
 		putchar('-');
 	}
@@ -261,12 +268,33 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 	if (cmdArgs.exec) {
 		printfln("--- %s execution ---", inputAsmFile);
 	} else {
-		printfln("; %s", inputAsmFile);
+		printfln(ASCII_COLOR_GREEN "; %s" ASCII_COLOR_END, inputAsmFile);
 	}
-	bool couldDecode = decodeOrSimulate(stdout, inputBinary, cmdArgs.exec);
+	bool const couldDecode = decodeOrSimulate(stdout, inputBinary, cmdArgs.exec);
 	putchar('\n');
 
-	if (cmdArgs.test && couldDecode) {
+	if (couldDecode && cmdArgs.dump) {
+		assertTrue(cmdArgs.exec);
+		size_t lastByteIndex = 0;
+		for (size_t i = 0; i < std::size(gMemory); i++) {
+			if (gMemory[i] != 0) {
+				lastByteIndex = i;
+			}
+		}
+		if (lastByteIndex > 0) {
+			String_Builder dumpName = string_builder_make();
+			dumpName.append("dump_");
+			dumpName.append(validInputAsmName);
+			defer(dumpName.destroy());
+			FILE* dumpFile = fopen(dumpName.items, "wb");
+			fwrite(gMemory, lastByteIndex, sizeof(u8), dumpFile);
+			fclose(dumpFile);
+			printfln(LOG_INFO_STRING": Created file '%s'", dumpName.items);
+		}
+	}
+
+	if (couldDecode && cmdArgs.test) {
+		assertTrue(cmdArgs.exec == false);
 		String_Builder decodedAsmBinaryFileName = string_builder_make();
 		decodedAsmBinaryFileName.append(".Temp_Sim86_Decoded_Output_");
 		decodedAsmBinaryFileName.append(validInputAsmName);
@@ -276,10 +304,9 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 		decodedAsmTextFileName.append(".asm");
 		defer(decodedAsmTextFileName.destroy());
 
-		assertTrue(cmdArgs.exec == false);
 		FILE* decodedAsmTextFile = fopen(decodedAsmTextFileName.items, "w");
 		assertTrue(decodedAsmTextFile != nullptr);
-		decodeOrSimulate(decodedAsmTextFile, inputBinary, cmdArgs.exec);
+		decodeOrSimulate(decodedAsmTextFile, inputBinary, false);
 		fclose(decodedAsmTextFile);
 		printfln(LOG_INFO_STRING": Created %s", decodedAsmTextFileName.items);
 		defer(deleteFile(decodedAsmTextFileName.items));

@@ -41,7 +41,35 @@ static Jumps::Outcome runJump(Decoder_Context &decoder, u8 &byte, Jumps::Info co
 	using namespace FlagsRegister;
 	bool jumped = false;
 	switch (jump.type) {
+		case Type::jo:  jumped =  getBit(Bit::OF); break;
+		case Type::jno: jumped = !getBit(Bit::OF); break;
+		case Type::jb:  jumped =  getBit(Bit::CF); break;
+		case Type::jnb: jumped = !getBit(Bit::CF); break;
+		case Type::je:  jumped =  getBit(Bit::ZF); break;
 		case Type::jne: jumped = !getBit(Bit::ZF); break;
+		case Type::jbe: jumped =  (getBit(Bit::ZF) || getBit(Bit::CF)); break;
+		case Type::ja:  jumped = !(getBit(Bit::ZF) || getBit(Bit::CF)); break;
+		case Type::js:  jumped =  getBit(Bit::SF); break;
+		case Type::jns: jumped = !getBit(Bit::SF); break;
+		case Type::jp:  jumped =  getBit(Bit::PF); break;
+		case Type::jnp: jumped = !getBit(Bit::PF); break;
+		case Type::jl:  jumped = (getBit(Bit::OF) != getBit(Bit::SF)); break;
+		case Type::jnl: jumped = (getBit(Bit::OF) == getBit(Bit::SF)); break;
+		case Type::jle: jumped =  (getBit(Bit::OF) != getBit(Bit::SF) || getBit(Bit::ZF)); break;
+		case Type::jg:  jumped = !(getBit(Bit::OF) != getBit(Bit::SF) || getBit(Bit::ZF)); break;
+		case Type::loop:
+			incrementRegister(RegX(c), -1);
+			jumped = (getRegisterValue(RegX(c)) == 0);
+			break;
+		case Type::loopz:
+			incrementRegister(RegX(c), -1);
+			jumped = getBit(Bit::ZF);
+			break;
+		case Type::loopnz:
+			incrementRegister(RegX(c), -1);
+			jumped = !getBit(Bit::ZF);
+			break;
+		case Type::jcxz: jumped = (getRegisterValue(RegX(c)) == 0); break;
 		default: {
 			decoder.println("; " LOG_ERROR_STRING ": %s is unimplemented", getMnemonic(jump.type));
 			return Outcome::error;
@@ -67,8 +95,7 @@ void decode_Jump(Decoder_Context& decoder, u8& byte) {
 	u8 const typeByte = byte;
 	u8 const data = decoder.advance08Bits(byte);
 
-	Instruction_Operand const operand = InstJump(typeByte, data);
-
+	auto const operand = InstJump(typeByte, data);
 
 	decoder.printInst(Jumps::getMnemonic(operand.jump.type), operand);
 	if (decoder.exec) {
