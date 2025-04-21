@@ -194,7 +194,6 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 
 		src = InstImmediate(!S && W, immediate);
         dst.type = Instruction_Operand_Type::EffectiveAddress;
-		dst.prefix = InstPrefix(W);
         dst.address.base = Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateWord(displacement);
 		dst.address.wide = W;
@@ -206,7 +205,6 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 
 		src = InstImmediate(!S && W, immediate);
         dst.type = Instruction_Operand_Type::EffectiveAddress;
-		dst.prefix = InstPrefix(W);
         dst.address.base = Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateByte(displacement);
 		dst.address.wide = W;
@@ -218,7 +216,6 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 
 		src = InstImmediate(!S && W, immediate);
         dst.type = Instruction_Operand_Type::EffectiveAddress;
-		dst.prefix = InstPrefix(W);
         dst.address.base = Effective_Address_Table[R_M];
         dst.address.displacement = makeImmediateWord(displacement);
 		dst.address.wide = W;

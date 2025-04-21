@@ -59,7 +59,7 @@ static Jumps::Outcome runJump(Decoder_Context &decoder, u8 &byte, Jumps::Info co
 		case Type::jg:  jumped = !(getBit(Bit::OF) != getBit(Bit::SF) || getBit(Bit::ZF)); break;
 		case Type::loop:
 			incrementRegister(RegX(c), -1);
-			jumped = (getRegisterValue(RegX(c)) == 0);
+			jumped = (getRegisterValue(RegX(c)) != 0);
 			break;
 		case Type::loopz:
 			incrementRegister(RegX(c), -1);
@@ -100,12 +100,17 @@ void decode_Jump(Decoder_Context& decoder, u8& byte) {
 	decoder.printInst(Jumps::getMnemonic(operand.jump.type), operand);
 	if (decoder.exec) {
         u16 const oldIP = getIP();
+		u16 const oldCX = getRegisterValue(RegX(c));
 		if (auto const outcome = runJump(decoder, byte, operand.jump);
 			outcome != Jumps::Outcome::error) {
-            decoder.print("; %s ", getOutcomeName(outcome));
             u16 const ip = getIP();
-            decoder.print("ip:0x%x->0x%x\n", oldIP, ip);
-			if (decoder.outFile == stdout) decoder.print(ASCII_COLOR_END);
+			u16 const cx = getRegisterValue(RegX(c));
+            decoder.print("; %s ", getOutcomeName(outcome));
+			if (JumpModifiesCX(operand.jump)) {
+				decoder.print("cx:%d->%d ", oldCX, cx);
+			}
+            decoder.println("ip:0x%x->0x%x", oldIP, ip);
+			if (decoder.shouldDecorateOutput()) decoder.print(ASCII_COLOR_END);
 		}
 	} else {
 		decoder.print("; (disp:%3d) <- ", operand.jump.offset);

@@ -13,3 +13,8 @@ cmake-build-*/
 
 # Keep the build file
 !CMakeLists.txt
+
+# Personal Files
+ignored.txt
+.temp86_*
+dump_*

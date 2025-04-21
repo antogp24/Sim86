@@ -13,6 +13,19 @@
 u16 gRegisterValues[RegisterCount] = {0};
 u8 gMemory[1024 * 1024] = {0};
 
+Instruction_Operand_Prefix getInstDstPrefix(Instruction_Operand const& dst, Instruction_Operand const& src) {
+	if (dst.type != Instruction_Operand_Type::EffectiveAddress) {
+		return Instruction_Operand_Prefix::None;
+	}
+	bool wide = false;
+	switch (src.type) {
+		case Instruction_Operand_Type::Immediate: wide = src.immediate.wide; break;
+		case Instruction_Operand_Type::Register:  wide = src.reg.usage == RegisterUsage::x; break;
+		default: unreachable();
+	}
+	return wide ? Instruction_Operand_Prefix::Word : Instruction_Operand_Prefix::Byte;
+}
+
 String_Builder getInstOpName(Instruction_Operand const& operand) {
 	String_Builder builder = string_builder_make();
 
@@ -46,9 +59,11 @@ u16 getInstOpValue(Instruction_Operand const& operand) {
 		case Instruction_Operand_Type::Immediate: return operand.immediate.word;
 
 		case Instruction_Operand_Type::EffectiveAddress: {
-			i16 const idx = EffectiveAddress::getInnerValue(operand.address);
+			u16 const idx = EffectiveAddress::getInnerValue(operand.address);
+			StaticArrayBoundsCheck(idx, gMemory);
 			if (operand.address.wide) {
-				return reinterpret_cast<u16*>(gMemory)[idx];
+				StaticArrayBoundsCheck(idx+1, gMemory);
+				return (gMemory[idx+1] << 8) + gMemory[idx+0];
 			} else {
 				return gMemory[idx];
 			}
@@ -65,9 +80,12 @@ void setInstOpValue(Instruction_Operand const& operand, u16 const value) {
 		} break;
 
 		case Instruction_Operand_Type::EffectiveAddress: {
-			i16 const idx = EffectiveAddress::getInnerValue(operand.address);
+			u16 const idx = EffectiveAddress::getInnerValue(operand.address);
+			StaticArrayBoundsCheck(idx, gMemory);
 			if (operand.address.wide) {
-				reinterpret_cast<u16*>(gMemory)[idx] = value;
+				StaticArrayBoundsCheck(idx+1, gMemory);
+				gMemory[idx+0] = value & 0xFF;
+				gMemory[idx+1] = value >> 8;
 			} else {
 				gMemory[idx] = value;
 			}
@@ -199,17 +217,17 @@ namespace EffectiveAddress {
     	}
     }
 
-	i16 getInnerValue(Info const& info) {
-    	i16 result;
+	u16 getInnerValue(Info const& info) {
+    	u16 result;
     	switch (info.base) {
-			case Base::bx_si: result = static_cast<i16>(getRegisterValue(RegX(b))  + getRegisterValue(RegX(si))); break;
-			case Base::bx_di: result = static_cast<i16>(getRegisterValue(RegX(b))  + getRegisterValue(RegX(di))); break;
-			case Base::bp_si: result = static_cast<i16>(getRegisterValue(RegX(bp)) + getRegisterValue(RegX(si))); break;
-			case Base::bp_di: result = static_cast<i16>(getRegisterValue(RegX(bp)) + getRegisterValue(RegX(di))); break;
-			case Base::si:    result = static_cast<i16>(getRegisterValue(RegX(si))); break;
-			case Base::di:    result = static_cast<i16>(getRegisterValue(RegX(di))); break;
-			case Base::bp:    result = static_cast<i16>(getRegisterValue(RegX(bp))); break;
-			case Base::bx:    result = static_cast<i16>(getRegisterValue(RegX(b)));  break;
+			case Base::bx_si: result = getRegisterValue(RegX(b))  + getRegisterValue(RegX(si)); break;
+			case Base::bx_di: result = getRegisterValue(RegX(b))  + getRegisterValue(RegX(di)); break;
+			case Base::bp_si: result = getRegisterValue(RegX(bp)) + getRegisterValue(RegX(si)); break;
+			case Base::bp_di: result = getRegisterValue(RegX(bp)) + getRegisterValue(RegX(di)); break;
+			case Base::si:    result = getRegisterValue(RegX(si)); break;
+			case Base::di:    result = getRegisterValue(RegX(di)); break;
+			case Base::bp:    result = getRegisterValue(RegX(bp)); break;
+			case Base::bx:    result = getRegisterValue(RegX(b));  break;
 			case Base::Direct: default: result = 0;
     	}
     	if (info.displacement.wide) {
@@ -222,7 +240,7 @@ namespace EffectiveAddress {
 }
 int Decoder_Context::printEffectiveAddressBase(EffectiveAddress::Base const base) const {
 	using namespace EffectiveAddress;
-	if (outFile == stdout) {
+	if (shouldDecorateOutput()) {
 		switch (base) {
 			case Base::Direct: return 0;
 			#define X(R) REGISTER_COLOR R ASCII_COLOR_END
@@ -245,35 +263,35 @@ int Decoder_Context::printEffectiveAddressBase(EffectiveAddress::Base const base
 	return _print(base2string(base));
 }
 
-int Decoder_Context::printInstOperand(Instruction_Operand const& operand) const {
+int Decoder_Context::printInstOperand(Instruction_Operand const& operand, Instruction_Operand_Prefix prefix) const {
 	if (operand.type == Instruction_Operand_Type::None) return 0;
 	int n = 0;
 
-	switch (operand.prefix) {
+	switch (prefix) {
         case Instruction_Operand_Prefix::Byte:
         case Instruction_Operand_Prefix::Word:
-			if (outFile == stdout) print(INST_PREFIX_COLOR);
-			n+=_print("%s ", InstOpPrefixName[static_cast<u8>(operand.prefix)]);
-			if (outFile == stdout) print(ASCII_COLOR_END);
+			if (shouldDecorateOutput()) print(INST_PREFIX_COLOR);
+			n+=_print("%s ", InstOpPrefixName[static_cast<u8>(prefix)]);
+			if (shouldDecorateOutput()) print(ASCII_COLOR_END);
 			break;
-        case Instruction_Operand_Prefix::None: default: break;
+		default: break;
 	}
 
 	switch (operand.type) {
         case Instruction_Operand_Type::Immediate: {
-        	if (outFile == stdout) print(NUMBER_COLOR);
+        	if (shouldDecorateOutput()) print(NUMBER_COLOR);
         	if (operand.immediate.wide) {
         		n+=_print("%" PRIi16, operand.immediate.word);
         	} else {
         		n+=_print("%" PRIi8, operand.immediate.byte);
         	}
-        	if (outFile == stdout) print(ASCII_COLOR_END);
+        	if (shouldDecorateOutput()) print(ASCII_COLOR_END);
         } break;
 
         case Instruction_Operand_Type::Register: {
-        	if (outFile == stdout) print(REGISTER_COLOR);
+        	if (shouldDecorateOutput()) print(REGISTER_COLOR);
 			n+=_print(getRegisterName(operand.reg));
-        	if (outFile == stdout) print(ASCII_COLOR_END);
+        	if (shouldDecorateOutput()) print(ASCII_COLOR_END);
         } break;
 
         case Instruction_Operand_Type::EffectiveAddress: {
@@ -285,26 +303,26 @@ int Decoder_Context::printInstOperand(Instruction_Operand const& operand) const 
         	if (operand.address.displacement.wide) {
                 if (operand.address.displacement.word > 0) {
 					if (hasBase) n+=_print(" + ");
-					if (outFile == stdout) print(NUMBER_COLOR);
+					if (shouldDecorateOutput()) print(NUMBER_COLOR);
 					n+=_print("%" PRIi16, operand.address.displacement.word);
-					if (outFile == stdout) print(ASCII_COLOR_END);
+					if (shouldDecorateOutput()) print(ASCII_COLOR_END);
                 } else if (operand.address.displacement.word < 0) {
 					n+=_print(hasBase ? " - " : "-");
-					if (outFile == stdout) print(NUMBER_COLOR);
+					if (shouldDecorateOutput()) print(NUMBER_COLOR);
 					n+=_print("%" PRIi16, -operand.address.displacement.word);
-					if (outFile == stdout) print(ASCII_COLOR_END);
+					if (shouldDecorateOutput()) print(ASCII_COLOR_END);
                 }
         	} else {
                 if (operand.address.displacement.byte > 0) {
 					if (hasBase) n+=_print(" + ");
-					if (outFile == stdout) print(NUMBER_COLOR);
+					if (shouldDecorateOutput()) print(NUMBER_COLOR);
 					n+=_print("%" PRIi8, operand.address.displacement.byte);
-					if (outFile == stdout) print(ASCII_COLOR_END);
+					if (shouldDecorateOutput()) print(ASCII_COLOR_END);
                 } else if (operand.address.displacement.byte < 0) {
 					n+=_print(hasBase ? " - " : "-");
-					if (outFile == stdout) print(NUMBER_COLOR);
+					if (shouldDecorateOutput()) print(NUMBER_COLOR);
 					n+=_print("%" PRIi16, -operand.address.displacement.byte);
-					if (outFile == stdout) print(ASCII_COLOR_END);
+					if (shouldDecorateOutput()) print(ASCII_COLOR_END);
                 }
         	}
 			fputc(']', outFile); n++;
@@ -315,27 +333,27 @@ int Decoder_Context::printInstOperand(Instruction_Operand const& operand) const 
 			i8 const disp = static_cast<i8>(operand.jump.offset + 2);
 			if (disp > 0) {
 				n+=_print("$+");
-				if (outFile == stdout) print(NUMBER_COLOR);
+				if (shouldDecorateOutput()) print(NUMBER_COLOR);
 				n+=_print("%" PRIi8, disp);
-				if (outFile == stdout) print(ASCII_COLOR_END);
+				if (shouldDecorateOutput()) print(ASCII_COLOR_END);
 				n+=_print("+");
-				if (outFile == stdout) print(NUMBER_COLOR);
+				if (shouldDecorateOutput()) print(NUMBER_COLOR);
 				n+=_print("%" PRIi8, 0);
-				if (outFile == stdout) print(ASCII_COLOR_END);
+				if (shouldDecorateOutput()) print(ASCII_COLOR_END);
 			} else if (disp < 0) {
 				n+=_print("$-");
-				if (outFile == stdout) print(NUMBER_COLOR);
+				if (shouldDecorateOutput()) print(NUMBER_COLOR);
 				n+=_print("%" PRIi8, -disp);
-				if (outFile == stdout) print(ASCII_COLOR_END);
+				if (shouldDecorateOutput()) print(ASCII_COLOR_END);
 				n+=_print("+");
-				if (outFile == stdout) print(NUMBER_COLOR);
+				if (shouldDecorateOutput()) print(NUMBER_COLOR);
 				n+=_print("%" PRIi8, 0);
-				if (outFile == stdout) print(ASCII_COLOR_END);
+				if (shouldDecorateOutput()) print(ASCII_COLOR_END);
 			} else {
 				n+=_print("$+");
-				if (outFile == stdout) print(NUMBER_COLOR);
+				if (shouldDecorateOutput()) print(NUMBER_COLOR);
 				n+=_print("%" PRIi8, 0);
-				if (outFile == stdout) print(ASCII_COLOR_END);
+				if (shouldDecorateOutput()) print(ASCII_COLOR_END);
 			}
 		} break;
 

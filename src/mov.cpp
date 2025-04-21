@@ -108,7 +108,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
             i16 const displacement = (R_M == 0b110) ? signExtendWord(decoder.advance16Bits(byte)) : signExtendWord(0);
 			u16 const immediate = decoder.advance8or16Bits(W, byte);
 
-			src = InstImmediatePrefixed(W, immediate);
+			src = InstImmediate(W, immediate);
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateWord(displacement);
@@ -119,7 +119,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			i8 const displacement = signExtendByte(decoder.advance08Bits(byte));
 			u16 const immediate = decoder.advance8or16Bits(W, byte);
 
-			src = InstImmediatePrefixed(W, immediate);
+			src = InstImmediate(W, immediate);
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateByte(displacement);
@@ -130,7 +130,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 			i16 const displacement = signExtendWord(decoder.advance16Bits(byte));
 			u16 const immediate = decoder.advance8or16Bits(W, byte);
 
-			src = InstImmediatePrefixed(W, immediate);
+			src = InstImmediate(W, immediate);
 			dst.type = Instruction_Operand_Type::EffectiveAddress;
 			dst.address.base = Effective_Address_Table[R_M];
 			dst.address.displacement = makeImmediateWord(displacement);

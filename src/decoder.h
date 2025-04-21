@@ -4,6 +4,14 @@
 #include "string_builder.h"
 #include <cstdarg>
 
+#if defined(_WIN32) || defined(_WIN64)
+	#include <io.h>
+	#define isatty _isatty
+	#define fileno _fileno
+#else
+	#include <unistd.h>
+#endif
+
 #define INSTRUCTION_LINE_SIZE 30
 
 #define COMMENT_COLOR      ASCII_COLOR_GREEN
@@ -68,7 +76,7 @@ namespace EffectiveAddress {
 		bool wide;
 	};
     const char* base2string(Base base);
-	i16 getInnerValue(Info const& info);
+	u16 getInnerValue(Info const& info);
 }
 
 namespace Jumps {
@@ -89,12 +97,16 @@ namespace Jumps {
 		jnl,          // 0b01111101 = 125
 		jle,          // 0b01111110 = 126
 		jg,           // 0b01111111 = 127
-		loop = 224,   // 0b11100010 = 224
+		loopnz = 224, // 0b11100000 = 224
 		loopz,        // 0b11100001 = 225
-		loopnz,       // 0b11100000 = 226
+		loop,         // 0b11100010 = 226
 		jcxz,         // 0b11100011 = 227
 	};
 
+	#define JumpModifiesCX(jump) \
+		((jump).type == Jumps::Type::loopnz || \
+		 (jump).type == Jumps::Type::loopz  || \
+		 (jump).type == Jumps::Type::loop)
 	#define ByteToJumpType(byte) static_cast<Jumps::Type>(byte)
 
 	struct Info {
@@ -107,9 +119,6 @@ namespace Jumps {
 	const char* getMnemonic(Type type);
 	const char* getOutcomeName(Outcome outcome);
 }
-
-enum struct Instruction_Operand_Prefix : u8 { None = 0, Byte, Word };
-constexpr const char* InstOpPrefixName[3] = { "", "byte", "word"};
 
 enum struct Instruction_Operand_Type : u8 {
 	None = 0,
@@ -133,8 +142,11 @@ struct Instruction_Operand {
 		Jumps::Info jump;
 	};
 	Instruction_Operand_Type type;
-	Instruction_Operand_Prefix prefix : 2;
 };
+
+enum struct Instruction_Operand_Prefix : u8 { None = 0, Byte, Word };
+constexpr const char* InstOpPrefixName[3] = { "", "byte", "word"};
+Instruction_Operand_Prefix getInstDstPrefix(Instruction_Operand const& dst, Instruction_Operand const& src);
 
 #define IsInstRegister(inst)  ((inst).type == Instruction_Operand_Type::Register)
 #define IsInstImmediate(inst) ((inst).type == Instruction_Operand_Type::Immediate)
@@ -153,41 +165,27 @@ String_Builder getInstOpName(Instruction_Operand const& operand);
 u16  getInstOpValue(Instruction_Operand const& operand);
 void setInstOpValue(Instruction_Operand const& operand, u16 value);
 
-#define InstPrefix(Wide)                       \
-	((Wide) ? Instruction_Operand_Prefix::Word \
-            : Instruction_Operand_Prefix::Byte)
-
 #define InstJump(typeByte, data) Instruction_Operand{ \
 	.jump=Jumps::Info{                                \
 		.type=ByteToJumpType(typeByte),               \
 		.offset=signExtendByte(data),                 \
 	},                                                \
 	.type = Instruction_Operand_Type::Jump,           \
-	.prefix = Instruction_Operand_Prefix::None        \
 }
 
 #define InstImmediateByte(Byte) Instruction_Operand{ \
 	.immediate = Immediate{.byte=Byte, .wide=0},     \
 	.type = Instruction_Operand_Type::Immediate,     \
-	.prefix = Instruction_Operand_Prefix::None       \
 }
 
 #define InstImmediateWord(Word) Instruction_Operand{ \
 	.immediate = Immediate{.word=Word, .wide=1},     \
 	.type = Instruction_Operand_Type::Immediate,     \
-	.prefix = Instruction_Operand_Prefix::None       \
 }
 
 #define InstImmediate(Wide, Value) Instruction_Operand{ \
 	.immediate = makeImmediate(Wide, Value),            \
 	.type = Instruction_Operand_Type::Immediate,        \
-	.prefix = Instruction_Operand_Prefix::None          \
-}
-
-#define InstImmediatePrefixed(Wide, Value) Instruction_Operand{ \
-	.immediate = makeImmediate(Wide, Value),                    \
-	.type = Instruction_Operand_Type::Immediate,                \
-	.prefix = InstPrefix(Wide)                                  \
 }
 
 #define InstGeneralReg(Type, Usage) Instruction_Operand{           \
@@ -303,6 +301,10 @@ struct Decoder_Context {
 	explicit Decoder_Context(FILE* OutFile, Slice<u8> const& BinaryBytes, bool const Exec):
 		outFile(OutFile), binaryBytes(BinaryBytes), exec(Exec) {}
 
+	[[nodiscard]] force_inline bool shouldDecorateOutput() const {
+		return isatty(fileno(outFile));
+	}
+
 	void advance(u8& currentByte) {
 		assertTrue(byteStack.count + 1 <= MAX_BYTES_PER_INSTRUCTION_8086);
 		assertTrue(bytesRead + 1 <= binaryBytes.count);
@@ -385,13 +387,13 @@ struct Decoder_Context {
 		print("->");
 		FlagsRegister::printSet(outFile);
 		fputc('\n', outFile);
-		if (outFile == stdout) print(ASCII_COLOR_END);
+		if (shouldDecorateOutput()) print(ASCII_COLOR_END);
 	}
 
 	void printlnIP() const {
 		printIP();
 		fputc('\n', outFile);
-		if (outFile == stdout) print(ASCII_COLOR_END);
+		if (shouldDecorateOutput()) print(ASCII_COLOR_END);
     }
 
 	void printIP(char const* ending) const {
@@ -421,7 +423,7 @@ struct Decoder_Context {
 	}
 
 	[[nodiscard]] int printEffectiveAddressBase(EffectiveAddress::Base base) const;
-	[[nodiscard]] int printInstOperand(Instruction_Operand const& operand) const;
+	[[nodiscard]] int printInstOperand(Instruction_Operand const& operand, Instruction_Operand_Prefix prefix) const;
 
 	void print(const char* fmt, ...) const {
 		va_list args;
@@ -448,7 +450,7 @@ struct Decoder_Context {
 
 	void printBitsHeader() const {
 		if (!exec) {
-			if (outFile == stdout) {
+			if (shouldDecorateOutput()) {
 				println(MNEMONIC_COLOR "bits" ASCII_COLOR_END " " NUMBER_COLOR "16" ASCII_COLOR_END);
 			} else {
 				println("bits 16");
@@ -458,19 +460,19 @@ struct Decoder_Context {
 
 	void printInst(const char* mnemonic, Instruction_Operand const& dst, Instruction_Operand const& src) const {
 		int n = 0;
-		if (outFile == stdout) print(MNEMONIC_COLOR);
+		if (shouldDecorateOutput()) print(MNEMONIC_COLOR);
 		n += _print("%s ", mnemonic);
-		if (outFile == stdout) print(ASCII_COLOR_END);
-		n += printInstOperand(dst);
+		if (shouldDecorateOutput()) print(ASCII_COLOR_END);
+		n += printInstOperand(dst, getInstDstPrefix(dst, src));
 		if (src.type != Instruction_Operand_Type::None) {
 			n += _print(", ");
-			n += printInstOperand(src);
+			n += printInstOperand(src, Instruction_Operand_Prefix::None);
 		}
 		n ++; fputc(' ', outFile);
 		for (int i = 0; i < INSTRUCTION_LINE_SIZE-n; i++) {
 			fputc(' ', outFile);
 		}
-		if (outFile == stdout) print(COMMENT_COLOR);
+		if (shouldDecorateOutput()) print(COMMENT_COLOR);
 	}
 
 	void printInst(const char* mnemonic, Instruction_Operand const& operand) const {
@@ -482,7 +484,7 @@ struct Decoder_Context {
 			if (i > 0) fputc(' ', outFile);
 			printBits(outFile, byteStack.items[i], 8);
 		}
-		if (outFile == stdout) print(ASCII_COLOR_END);
+		if (shouldDecorateOutput()) print(ASCII_COLOR_END);
 		fputc('\n', outFile);
 	}
 

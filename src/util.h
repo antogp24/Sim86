@@ -72,15 +72,15 @@ typedef unsigned int uint;
 
 // Constants of enough size to make a string of an integer
 // ------------------------------------------------------------------------------------------------------ //
-#define I8_STR_SIZE_BASE10  std::size(I8_MIN_STR_BASE10)
-#define I16_STR_SIZE_BASE10 std::size(I16_MIN_STR_BASE10)
-#define I32_STR_SIZE_BASE10 std::size(I32_MIN_STR_BASE10)
-#define I64_STR_SIZE_BASE10 std::size(I64_MIN_STR_BASE10)
+#define I8_STR_SIZE_BASE10  StaticArrayCount(I8_MIN_STR_BASE10)
+#define I16_STR_SIZE_BASE10 StaticArrayCount(I16_MIN_STR_BASE10)
+#define I32_STR_SIZE_BASE10 StaticArrayCount(I32_MIN_STR_BASE10)
+#define I64_STR_SIZE_BASE10 StaticArrayCount(I64_MIN_STR_BASE10)
 
-#define U8_STR_SIZE_BASE10  std::size(U8_MAX_STR_BASE10)
-#define U16_STR_SIZE_BASE10 std::size(U16_MAX_STR_BASE10)
-#define U32_STR_SIZE_BASE10 std::size(U32_MAX_STR_BASE10)
-#define U64_STR_SIZE_BASE10 std::size(U64_MAX_STR_BASE10)
+#define U8_STR_SIZE_BASE10  StaticArrayCount(U8_MAX_STR_BASE10)
+#define U16_STR_SIZE_BASE10 StaticArrayCount(U16_MAX_STR_BASE10)
+#define U32_STR_SIZE_BASE10 StaticArrayCount(U32_MAX_STR_BASE10)
+#define U64_STR_SIZE_BASE10 StaticArrayCount(U64_MAX_STR_BASE10)
 
 // Convenient Macros
 // ------------------------------------------------------------------------------------------------------ //
@@ -89,7 +89,8 @@ typedef unsigned int uint;
 #define eprintfln(fmt, ...)    fprintf(stderr, fmt"\n", ##__VA_ARGS__)
 #define   eprintf(fmt, ...)    fprintf(stderr, fmt,     ##__VA_ARGS__)
 
-#define StrLen(str) (std::size(str)-1)
+#define StaticArrayCount(arr) std::size(arr)
+#define StrLen(str) (StaticArrayCount(str)-1)
 #define cast(T) (T)
 #define Swap(T, a, b) do { T t = a; a = b; b = t; } while(0)
 #define Unused(x) (void)x
@@ -129,31 +130,36 @@ typedef unsigned int uint;
     #else
         #error "util.h (setBreakpoint): Unsupported platform"
     #endif
-
-	#include <cstdlib>
-
-	#if defined(_MSC_VER)
-        // MSVC compiler error format.
-		#define FatalDebugMsgFormat " %s(%d): "
-	#else
-        // gcc/clang compiler error format.
-		#define FatalDebugMsgFormat " %s:%d:0: "
-	#endif
-
-    #define FatalDebugMsg(type, fmt, ...) do {                                              \
-        fprintfln(stderr, type FatalDebugMsgFormat fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
-        setBreakpoint();                                                                    \
-        exit(1);                                                                            \
-    } while(0)
-    #define assertTrue(c) do { if (!(c)) { FatalDebugMsg("Assert", "false == (%s)", #c); } }while(0)
-    #define panic(fmt, ...) FatalDebugMsg("Panic", fmt, ##__VA_ARGS__)
-    #define TODO(msg) FatalDebugMsg("TODO", msg)
-#else
-    #define setBreakpoint()
-    #define assertTrue(c)
-    #define panic(fmt, ...)
-    #define TODO(msg)
 #endif
+
+#if defined(_MSC_VER)
+	// MSVC compiler error format.
+	#define FatalDebugMsgFormat " %s(%d): "
+#else
+	// gcc/clang compiler error format.
+	#define FatalDebugMsgFormat " %s:%d:0: "
+#endif
+
+#define FatalDebugMsg(type, fmt, ...) do {                            \
+	fprintfln(                                                        \
+		stderr,                                                       \
+		ASCII_COLOR_RED type ASCII_COLOR_END FatalDebugMsgFormat fmt, \
+		__FILE__, __LINE__, ##__VA_ARGS__);                           \
+	setBreakpoint();                                                  \
+	exit(1);                                                          \
+} while(0)
+#define assertTrue(c) do { if (!(c)) { FatalDebugMsg("[Assert]", "false == (%s)", #c); } }while(0)
+#define panic(fmt, ...) FatalDebugMsg("[Panic]", fmt, ##__VA_ARGS__)
+#define TODO(msg) FatalDebugMsg("[TODO]", msg)
+
+#define StaticArrayBoundsCheck(i, arr) do {                   \
+	if ((i) < 0 || (i) > StaticArrayCount(arr)) {             \
+		FatalDebugMsg(                                        \
+			"[OutOfBounds]",                                  \
+			"Indexing " #arr "[%d] where len(" #arr ") = %d", \
+			i, StaticArrayCount(arr));                        \
+	}                                                         \
+} while (0)
 
 #ifdef _MSC_VER
 	#define unreachable() do {                                                       \
@@ -170,7 +176,7 @@ typedef unsigned int uint;
 
 #define PtrBaseType(ptr) cppRemoveReference<decltype(*ptr)>::Type
 #define PtrToSlice(ptr, size) Slice<PtrBaseType(ptr)>(ptr, size)
-#define ArrayToSlice(array) Slice<PtrBaseType(array)>(array, std::size(array))
+#define ArrayToSlice(array) Slice<PtrBaseType(array)>(array, StaticArrayCount(array))
 #define StdVectorToSlice(v) Slice<PtrBaseType(v.data())>(v.data(), v.size())
 
 template <typename T>

@@ -9,14 +9,14 @@
 #include "decoder.h"
 #include "util.h"
 
-const char* getFileName(const char* path) {
+String_View getFileName(const char* path) {
 	#ifdef __WIN32
 		constexpr char slash = '\\';
 	#else
 		constexpr char slash = '/';
 	#endif
 	const auto parts = String_View(path).split(slash);
-	return parts[parts.size()-1].items;
+	return parts[parts.size()-1];
 }
 
 Slice<u8> readEntireFile(const char* path) {
@@ -50,20 +50,6 @@ bool isValidFileNameCharacter(char c) {
 	}
 }
 
-char* pathToValidFileName(const char* path, size_t const len) {
-	char* result = static_cast<char*>(malloc(len + 1));
-	assertTrue(result != nullptr);
-	for (size_t i = 0; i < len; i++) {
-		if (!isValidFileNameCharacter(path[i])) {
-			result[i] = '_';
-		} else {
-			result[i] = path[i];
-		}
-	}
-	result[len] = 0;
-	return result;
-}
-
 bool isFileAsm(std::string const& filename) {
 	auto const parts = String_View(filename).split('.');
 	auto const& last = parts[parts.size()-1];
@@ -76,7 +62,8 @@ std::vector<std::string> getAllAsmFilesInDir(const char* path) {
 	if (!fs::exists(path)) {
 		eprintfln(LOG_ERROR_STRING": The folder '%s' does not exist.", path);
 		exit(1);
-	} else if (!fs::is_directory(path)) {
+	}
+	if (!fs::is_directory(path)) {
 		eprintfln(LOG_ERROR_STRING": The entry '%s' is not a directory.", path);
 		exit(1);
 	}
@@ -112,7 +99,7 @@ std::string fuzzyMatch(const char* path, const char* substr) {
 }
 
 void usage(FILE* out, const char* program) {
-	const char* programName = getFileName(program);
+	const char* programName = getFileName(program).items;
 	fprintfln(out, "Usage: %s [-exec] [-d <directory>] <substring of *.asm>", programName);
 	exit(out == stderr ? 1 : 0);
 }
@@ -238,11 +225,14 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 	}
 	defer(fclose(inputAsm));
 
-	char* validInputAsmName = pathToValidFileName(inputAsmPath, strlen(inputAsmPath)-StrLen(".asm"));
-	defer(free(validInputAsmName));
+	String_View const inputAsmFileName = getFileName(inputAsmPath);
+	auto const validInputAsmName = String_View{
+		inputAsmFileName.items,
+		inputAsmFileName.count - StrLen(".asm"),
+	};
 
 	String_Builder tempFileName = string_builder_make();
-	tempFileName.append(".Temp_Sim86_");
+	tempFileName.append(".temp86_");
 	tempFileName.append(validInputAsmName);
 	defer(tempFileName.destroy());
 
@@ -264,11 +254,10 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 	Slice<u8> inputBinary = readEntireFile(tempFileName.items);
 	defer(free(inputBinary.ptr));
 
-	const char* inputAsmFile = getFileName(inputAsmPath);
 	if (cmdArgs.exec) {
-		printfln("--- %s execution ---", inputAsmFile);
+		printfln("--- %s execution ---", inputAsmFileName.items);
 	} else {
-		printfln(ASCII_COLOR_GREEN "; %s" ASCII_COLOR_END, inputAsmFile);
+		printfln(ASCII_COLOR_GREEN "; %s" ASCII_COLOR_END, inputAsmFileName.items);
 	}
 	bool const couldDecode = decodeOrSimulate(stdout, inputBinary, cmdArgs.exec);
 	putchar('\n');
@@ -276,7 +265,7 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 	if (couldDecode && cmdArgs.dump) {
 		assertTrue(cmdArgs.exec);
 		size_t lastByteIndex = 0;
-		for (size_t i = 0; i < std::size(gMemory); i++) {
+		for (size_t i = 0; i < StaticArrayCount(gMemory); i++) {
 			if (gMemory[i] != 0) {
 				lastByteIndex = i;
 			}
@@ -296,7 +285,7 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 	if (couldDecode && cmdArgs.test) {
 		assertTrue(cmdArgs.exec == false);
 		String_Builder decodedAsmBinaryFileName = string_builder_make();
-		decodedAsmBinaryFileName.append(".Temp_Sim86_Decoded_Output_");
+		decodedAsmBinaryFileName.append(".temp86_out_");
 		decodedAsmBinaryFileName.append(validInputAsmName);
 		defer(decodedAsmBinaryFileName.destroy());
 
@@ -324,8 +313,8 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 	}
 }
 
-int main(int argc, char **argv) {
-	#ifdef _DEBUG
+int main(int const argc, char **argv) {
+	#if 0
 		setvbuf(stdout, nullptr, _IONBF, 0);
 	#endif
 	Cmd_Args cmdArgs(argc, argv);
