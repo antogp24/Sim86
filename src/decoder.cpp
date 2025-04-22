@@ -3,27 +3,45 @@
 #include <cstring>
 #include <cmath>
 
-#include "string_builder.h"
 #include "decoder.h"
 #include "mov.h"
 #include "add_sub_cmp.h"
 #include "jumps.h"
 #include "util.h"
+#include "string_builder.h"
 
 u16 gRegisterValues[RegisterCount] = {0};
 u8 gMemory[1024 * 1024] = {0};
+
+Disp_Type get_Disp_Type(u8 const MOD, u8 const R_M) {
+	switch (MOD) {
+		case 0b00: return (R_M == 0b110) ? Disp_16_bit : Disp_None;
+		case 0b01: return Disp_08_bit;
+		case 0b10: return Disp_16_bit;
+		case 0b11: return Disp_None;
+		default: unreachable();
+	}
+}
+
+Immediate makeImmediateDisp(u16 const disp, u8 const MOD, u8 const R_M) {
+	switch (get_Disp_Type(MOD, R_M)) {
+		case Disp_None:   return makeImmediateByte(0);
+		case Disp_08_bit: return makeImmediateByte(signExtendByte(disp));
+		case Disp_16_bit: return makeImmediateWord(signExtendWord(disp));
+		default: unreachable();
+	}
+}
 
 Instruction_Operand_Prefix getInstDstPrefix(Instruction_Operand const& dst, Instruction_Operand const& src) {
 	if (dst.type != Instruction_Operand_Type::EffectiveAddress) {
 		return Instruction_Operand_Prefix::None;
 	}
-	bool wide = false;
-	switch (src.type) {
-		case Instruction_Operand_Type::Immediate: wide = src.immediate.wide; break;
-		case Instruction_Operand_Type::Register:  wide = src.reg.usage == RegisterUsage::x; break;
-		default: unreachable();
+	if (src.type == Instruction_Operand_Type::Immediate) {
+		return dst.address.wide
+			? Instruction_Operand_Prefix::Word
+			: Instruction_Operand_Prefix::Byte;
 	}
-	return wide ? Instruction_Operand_Prefix::Word : Instruction_Operand_Prefix::Byte;
+	return Instruction_Operand_Prefix::None;
 }
 
 String_Builder getInstOpName(Instruction_Operand const& operand) {
@@ -59,7 +77,7 @@ u16 getInstOpValue(Instruction_Operand const& operand) {
 		case Instruction_Operand_Type::Immediate: return operand.immediate.word;
 
 		case Instruction_Operand_Type::EffectiveAddress: {
-			u16 const idx = EffectiveAddress::getInnerValue(operand.address);
+			u32 const idx = EffectiveAddress::getInnerValue(operand.address);
 			StaticArrayBoundsCheck(idx, gMemory);
 			if (operand.address.wide) {
 				StaticArrayBoundsCheck(idx+1, gMemory);
@@ -80,7 +98,7 @@ void setInstOpValue(Instruction_Operand const& operand, u16 const value) {
 		} break;
 
 		case Instruction_Operand_Type::EffectiveAddress: {
-			u16 const idx = EffectiveAddress::getInnerValue(operand.address);
+			u32 const idx = EffectiveAddress::getInnerValue(operand.address);
 			StaticArrayBoundsCheck(idx, gMemory);
 			if (operand.address.wide) {
 				StaticArrayBoundsCheck(idx+1, gMemory);
@@ -217,18 +235,18 @@ namespace EffectiveAddress {
     	}
     }
 
-	u16 getInnerValue(Info const& info) {
-    	u16 result;
+	u32 getInnerValue(Info const& info) {
+    	u32 result;
     	switch (info.base) {
-			case Base::bx_si: result = getRegisterValue(RegX(b))  + getRegisterValue(RegX(si)); break;
-			case Base::bx_di: result = getRegisterValue(RegX(b))  + getRegisterValue(RegX(di)); break;
-			case Base::bp_si: result = getRegisterValue(RegX(bp)) + getRegisterValue(RegX(si)); break;
-			case Base::bp_di: result = getRegisterValue(RegX(bp)) + getRegisterValue(RegX(di)); break;
-			case Base::si:    result = getRegisterValue(RegX(si)); break;
-			case Base::di:    result = getRegisterValue(RegX(di)); break;
-			case Base::bp:    result = getRegisterValue(RegX(bp)); break;
-			case Base::bx:    result = getRegisterValue(RegX(b));  break;
-			case Base::Direct: default: result = 0;
+			case Base::bx_si:  result = getRegisterValue(RegX(b))  + getRegisterValue(RegX(si)); break;
+			case Base::bx_di:  result = getRegisterValue(RegX(b))  + getRegisterValue(RegX(di)); break;
+			case Base::bp_si:  result = getRegisterValue(RegX(bp)) + getRegisterValue(RegX(si)); break;
+			case Base::bp_di:  result = getRegisterValue(RegX(bp)) + getRegisterValue(RegX(di)); break;
+			case Base::si:     result = getRegisterValue(RegX(si)); break;
+			case Base::di:     result = getRegisterValue(RegX(di)); break;
+			case Base::bp:     result = getRegisterValue(RegX(bp)); break;
+			case Base::bx:     result = getRegisterValue(RegX(b));  break;
+			case Base::Direct: result = 0;
     	}
     	if (info.displacement.wide) {
     		result += info.displacement.word;

@@ -40,45 +40,17 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		u8 const MOD = (byte >> 6) & 0b11;
 		u8 const REG = (byte >> 3) & 0b111;
 		u8 const R_M = (byte)      & 0b111;
+		assertTrue(is_MOD_Valid(MOD));
+		assertTrue(is_REG_Valid(REG));
+		assertTrue(is_R_M_Valid(R_M));
 
-		// Memory Mode (if R/M=110 then 16-bit displacement, otherwise no displacement).
-		if (MOD == 0b00) {
-            i16 const displacement = (R_M == 0b110) ? signExtendWord(decoder.advance16Bits(byte)) : signExtendWord(0);
-
-			// (D = 0) REG is the source.
-			src = REG_Table[REG][W];
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateWord(displacement);
-			dst.address.wide = W;
-		}
-		// Memory Mode (8-bit displacement)
-		else if (MOD == 0b01) {
-			i8 const displacement = signExtendByte(decoder.advance08Bits(byte));
-
-			// (D = 0) REG is the source.
-			src = REG_Table[REG][W];
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateByte(displacement);
-			dst.address.wide = W;
-		}
-		// Memory Mode (16-bit displacement)
-		else if (MOD == 0b10) {
-			i16 const displacement = signExtendWord(decoder.advance16Bits(byte));
-
-			// (D = 0) REG is the source.
-			src = REG_Table[REG][W];
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateWord(displacement);
-			dst.address.wide = W;
-		}
-		// Register Mode (no displacement)
-		else if (MOD == 0b11) {
-			// (D = 0) REG is the source.
+		// (D = 0) REG is the source.
+		src = REG_Table[REG][W];
+		if (is_MOD_Register_Mode(MOD)) {
 			dst = REG_Table[R_M][W];
-			src = REG_Table[REG][W];
+		} else {
+			u16 const displacement = decoder.advanceDisplacement(MOD, R_M, byte);
+			dst = InstEffectiveAddress(MOD, R_M, W, displacement);
 		}
 
 		if (D) { // (D = 1) REG is the destination.
@@ -102,45 +74,18 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		decoder.advance(byte);
 		u8 const R_M = (byte)      & 0b111;
 		u8 const MOD = (byte >> 6) & 0b11;
+		assertTrue(is_MOD_Valid(MOD));
+		assertTrue(is_R_M_Valid(R_M));
 
-		// Memory Mode (if R/M=110 then 16-bit displacement, otherwise no displacement).
-		if (MOD == 0b00) {
-            i16 const displacement = (R_M == 0b110) ? signExtendWord(decoder.advance16Bits(byte)) : signExtendWord(0);
-			u16 const immediate = decoder.advance8or16Bits(W, byte);
-
-			src = InstImmediate(W, immediate);
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateWord(displacement);
-			dst.address.wide = W;
-		}
-		// Memory Mode (8-bit displacement)
-		else if (MOD == 0b01) {
-			i8 const displacement = signExtendByte(decoder.advance08Bits(byte));
-			u16 const immediate = decoder.advance8or16Bits(W, byte);
-
-			src = InstImmediate(W, immediate);
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateByte(displacement);
-			dst.address.wide = W;
-		}
-		// Memory Mode (16-bit displacement)
-		else if (MOD == 0b10) {
-			i16 const displacement = signExtendWord(decoder.advance16Bits(byte));
-			u16 const immediate = decoder.advance8or16Bits(W, byte);
-
-			src = InstImmediate(W, immediate);
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateWord(displacement);
-			dst.address.wide = W;
-		}
-		// Register Mode (no displacement)
-		else if (MOD == 0b11) {
+		if (is_MOD_Register_Mode(MOD)) {
 			u16 const immediate = decoder.advance8or16Bits(W, byte);
 			src = InstImmediate(W, immediate);
 			dst = REG_Table[R_M][W];
+		} else {
+			u16 const displacement = decoder.advanceDisplacement(MOD, R_M, byte);
+			u16 const immediate = decoder.advance8or16Bits(W, byte);
+			src = InstImmediate(W, immediate);
+			dst = InstEffectiveAddress(MOD, R_M, W, displacement);
 		}
 
 		decoder.printInst("mov", dst, src);
@@ -156,6 +101,8 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 	else if (byte >> 4 == 0b1011) {
 		bool const W = (byte >> 3) & 1;
 		u8 const REG = byte & 0b111;
+		assertTrue(is_REG_Valid(REG));
+
 		u16 const data = decoder.advance8or16Bits(W, byte);
 
 		dst = REG_Table[REG][W];
@@ -178,9 +125,7 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 
 		// (D = 0) The address is the source.
 		const char* description = "Memory to accumulator";
-		src.type = Instruction_Operand_Type::EffectiveAddress;
-		src.address.base = EffectiveAddress::Base::Direct;
-		src.address.displacement = makeImmediateWord(address);
+		src = InstEffectiveAddressDirectWord(W, address);
 		dst = REG_Table[0b000][W];
 
 		if (D) { // (D = 1) The address is the destination.
@@ -202,45 +147,17 @@ void decode_MOV(Decoder_Context& decoder, u8& byte) {
 		u8 const MOD = (byte >> 6) & 0b11;
 		u8 const SR  = (byte >> 3) & 0b11;
 		u8 const R_M = (byte)      & 0b111;
+		assertTrue(is_MOD_Valid(MOD));
+		assertTrue(is_SR_Valid(SR));
+		assertTrue(is_R_M_Valid(R_M));
 
-		// Memory Mode (if R/M=110 then 16-bit displacement, otherwise no displacement).
-		if (MOD == 0b00) {
-            i16 const displacement = (R_M == 0b110) ? signExtendWord(decoder.advance16Bits(byte)) : signExtendWord(0);
-
-			// (D = 0) SR is the source.
-			src = SR_Table[SR];
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = (R_M == 0b110) ? EffectiveAddress::Base::Direct : Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateWord(displacement);
-			dst.address.wide = true;
-		}
-		// Memory Mode (8-bit displacement)
-		else if (MOD == 0b01) {
-			i8 const displacement = signExtendByte(decoder.advance08Bits(byte));
-
-			// (D = 0) SR is the source.
-			src = SR_Table[SR];
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateByte(displacement);
-			dst.address.wide = true;
-		}
-		// Memory Mode (16-bit displacement)
-		else if (MOD == 0b10) {
-			i16 const displacement = signExtendWord(decoder.advance16Bits(byte));
-
-			// (D = 0) SR is the source.
-			src = SR_Table[SR];
-			dst.type = Instruction_Operand_Type::EffectiveAddress;
-			dst.address.base = Effective_Address_Table[R_M];
-			dst.address.displacement = makeImmediateWord(displacement);
-			dst.address.wide = true;
-		}
-		// Register Mode (no displacement)
-		else if (MOD == 0b11) {
-			// (D = 0) SR is the source.
-			dst = REG_Table[R_M][0];
-			src = SR_Table[SR];
+		// (D = 0) SR is the source.
+		src = SR_Table[SR];
+		if (is_MOD_Register_Mode(MOD)) {
+			dst = REG_Table[R_M][1];
+		} else {
+			u16 const displacement = decoder.advanceDisplacement(MOD, R_M, byte);
+			dst = InstEffectiveAddress(MOD, R_M, true, displacement);
 		}
 
 		if (D) { // (D = 1) SR is the destination.

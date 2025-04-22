@@ -124,6 +124,7 @@ struct Cmd_Args {
 				test = true;
 			} else if (0 == strcmp(opt, "-dump")) {
 				dump = true;
+				exec = true;
 			} else if (0 == strcmp(opt, "-d")) {
 				if (arg == nullptr) {
 					usage(stderr, argv[0]);
@@ -152,10 +153,6 @@ struct Cmd_Args {
 		}
 		if (exec && test) {
 			eprintfln(LOG_ERROR_STRING": Can not provide the flags '-exec' and '-test' at the same time.");
-			usage(stderr, argv[0]);
-		}
-		if (dump && !exec) {
-			eprintfln(LOG_ERROR_STRING": The flag `-dump` requires the flag `-exec`");
 			usage(stderr, argv[0]);
 		}
 	}

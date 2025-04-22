@@ -161,15 +161,23 @@ typedef unsigned int uint;
 	}                                                         \
 } while (0)
 
+#define BoundsCheck(i, len) do {               \
+	if ((i) < 0 || (i) > (len)) {              \
+		FatalDebugMsg(                         \
+			"[OutOfBounds]",                   \
+			"%d is outside of [0, %d]", 0, i); \
+	}                                          \
+} while (0)
+
 #ifdef _MSC_VER
-	#define unreachable() do {                                                       \
-		panic(LOG_ERROR_STRING"[%s:%d]: Reached unreachable", __FILE__, __LINE__-1); \
-		__assume(false);                                                             \
+	#define unreachable() do {                                      \
+		FatalDebugMsg("[Unreachable]", "Reached unreachable code"); \
+		__assume(false);                                            \
 	} while(0)
 #else
-	#define unreachable() do {                                                       \
-		panic(LOG_ERROR_STRING"[%s:%d]: Reached unreachable", __FILE__, __LINE__-1); \
-		__builtin_unreachable();                                                     \
+	#define unreachable() do {                                      \
+		FatalDebugMsg("[Unreachable]", "Reached unreachable code"); \
+		__builtin_unreachable();                                    \
 	} while(0)
 #endif
 

@@ -26,6 +26,21 @@ struct Byte_Stack_8086 {
 	i8 count;
 };
 
+enum Disp_Type : u8 { Disp_None = 0, Disp_08_bit, Disp_16_bit };
+
+// (MOD = 0b00) mode:   (Memory), disp: (R/M==110 ? 16-bit : none)
+// (MOD = 0b01) mode:   (Memory), disp: (08-bit)
+// (MOD = 0b10) mode:   (Memory), disp: (16-bit)
+// (MOD = 0b11) mode: (Register), disp: (none)
+Disp_Type get_Disp_Type(u8 MOD, u8 R_M);
+
+#define is_MOD_Valid(MOD) ((MOD) >= 0b00  && (MOD) <= 0b11)
+#define is_R_M_Valid(R_M) ((R_M) >= 0b000 && (R_M) <= 0b111)
+#define is_REG_Valid(REG) ((REG) >= 0b000 && (REG) <= 0b111)
+#define is_SR_Valid(SR)   ((SR)  >= 0b00  && (SR)  <= 0b11)
+
+#define is_MOD_Register_Mode(MOD) ((MOD) == 0b11)
+
 enum struct Register : u8 {
 	a = 0, b, c, d, sp, bp, si, di,
 	cs, ds, ss, es, ip, fl, Count,
@@ -64,6 +79,8 @@ struct Immediate {
 #define makeImmediateWord(Word) Immediate{.word=Word, .wide=1}
 #define makeImmediate(Wide, Value) ((Wide) ? makeImmediateWord(signExtendWord(Value)) : makeImmediateByte(signExtendByte(Value)))
 
+Immediate makeImmediateDisp(u16 disp, u8 MOD, u8 R_M);
+
 namespace EffectiveAddress {
 	enum struct Base : u8 {
 		Direct = 0,
@@ -76,7 +93,9 @@ namespace EffectiveAddress {
 		bool wide;
 	};
     const char* base2string(Base base);
-	u16 getInnerValue(Info const& info);
+	u32 getInnerValue(Info const& info);
+
+	#define is_Effective_Address_Direct(MOD, R_M) ((MOD) == 0b00 && (R_M) == 0b110)
 }
 
 namespace Jumps {
@@ -173,20 +192,30 @@ void setInstOpValue(Instruction_Operand const& operand, u16 value);
 	.type = Instruction_Operand_Type::Jump,           \
 }
 
-#define InstImmediateByte(Byte) Instruction_Operand{ \
-	.immediate = Immediate{.byte=Byte, .wide=0},     \
-	.type = Instruction_Operand_Type::Immediate,     \
-}
-
-#define InstImmediateWord(Word) Instruction_Operand{ \
-	.immediate = Immediate{.word=Word, .wide=1},     \
-	.type = Instruction_Operand_Type::Immediate,     \
-}
-
 #define InstImmediate(Wide, Value) Instruction_Operand{ \
 	.immediate = makeImmediate(Wide, Value),            \
 	.type = Instruction_Operand_Type::Immediate,        \
 }
+
+#define InstEffectiveAddress(MOD, R_M, Wide, Disp) Instruction_Operand{ \
+	.address = EffectiveAddress::Info {                                 \
+		.base = (is_Effective_Address_Direct(MOD, R_M))                 \
+				? EffectiveAddress::Base::Direct                        \
+				: Effective_Address_Table[R_M],                         \
+		.displacement = makeImmediateDisp(Disp, MOD, R_M),              \
+		.wide = Wide,                                                   \
+	},                                                                  \
+	.type = Instruction_Operand_Type::EffectiveAddress,                 \
+}
+
+#define InstEffectiveAddressDirectWord(Wide, Disp) Instruction_Operand{ \
+		.address = EffectiveAddress::Info {                             \
+			.base = EffectiveAddress::Base::Direct,                     \
+			.displacement = makeImmediateWord(Disp),                    \
+			.wide = Wide,                                               \
+		},                                                              \
+		.type = Instruction_Operand_Type::EffectiveAddress,             \
+	}
 
 #define InstGeneralReg(Type, Usage) Instruction_Operand{           \
 	.reg = {.type = Register::Type, .usage = RegisterUsage::Usage},\
@@ -360,6 +389,15 @@ struct Decoder_Context {
 	[[nodiscard]] u8 advance08Bits(u8& byte) {
 		advance(byte);
 		return byte;
+	}
+
+	[[nodiscard]] u16 advanceDisplacement(u8 const MOD, u8 const R_M, u8& byte) {
+		switch (get_Disp_Type(MOD, R_M)) {
+			case Disp_None:   return 0;
+			case Disp_08_bit: return advance08Bits(byte);
+			case Disp_16_bit: return advance16Bits(byte);
+			default: unreachable();
+		}
 	}
 
 	void printSR(u8 const SR, char const ending) const {
