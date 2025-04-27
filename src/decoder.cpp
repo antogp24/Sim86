@@ -12,6 +12,7 @@
 
 u16 gRegisterValues[RegisterCount] = {0};
 u8 gMemory[1024 * 1024] = {0};
+u64 gClocks = 0;
 
 Disp_Type get_Disp_Type(u8 const MOD, u8 const R_M) {
 	switch (MOD) {
@@ -32,12 +33,10 @@ Immediate makeImmediateDisp(u16 const disp, u8 const MOD, u8 const R_M) {
 	}
 }
 
-Instruction_Operand_Prefix getInstDstPrefix(Instruction_Operand const& dst, Instruction_Operand const& src) {
-	if (dst.type != Instruction_Operand_Type::EffectiveAddress) {
-		return Instruction_Operand_Prefix::None;
-	}
-	if (src.type == Instruction_Operand_Type::Immediate) {
-		return dst.address.wide
+Instruction_Operand_Prefix getInstDstPrefix(Instruction const& inst) {
+	if (inst.dst.type == Instruction_Operand_Type::EffectiveAddress &&
+	    inst.src.type == Instruction_Operand_Type::Immediate) {
+		return inst.dst.address.wide
 			? Instruction_Operand_Prefix::Word
 			: Instruction_Operand_Prefix::Byte;
 	}
@@ -107,9 +106,9 @@ void setInstOpValue(Instruction_Operand const& operand, u16 const value) {
 			} else {
 				gMemory[idx] = value;
 			}
-		}
+		} break;
 
-		default: /* error */ break;
+		default: unreachable();
 	}
 }
 
@@ -255,17 +254,162 @@ namespace EffectiveAddress {
     	}
     	return result;
     }
+
+	u8 getClocks(Info const& info) {
+    	if (has_EA_Disp(info)) {
+    		if (info.base == Base::Direct) {
+    			return 6; // Displacement Only
+    		}
+    		if (is_EA_Base_or_Index(info)) {
+    			return 9; // Displacement + (Base or Index)
+    		}
+    		if (is_EA_Base_Plus_Index(info)) {
+    			// Displacement + Base + Index
+    			return (info.base == Base::bp_di || info.base == Base::bx_si) ? 11 : 12;
+    		}
+    	} else {
+    		if (is_EA_Base_or_Index(info)) {
+    			return 5; // Base or Index Only
+    		}
+    		if (is_EA_Base_Plus_Index(info)) {
+    			// Base + Index
+    			return (info.base == Base::bp_di || info.base == Base::bx_si) ? 7 : 8;
+    		}
+    	}
+    	unreachable();
+    }
 }
+
+u8 getPartClocks(Clock_Calculation_Part const& part) {
+	switch (part.type) {
+		case Clock_Inst:  return part.value;
+		case Clock_EA:    return EffectiveAddress::getClocks(part.address);
+		case Clock_Range: return part.B;
+		case Clock_AorB:  return Max(part.A, part.B);
+		case Clock_SegmentOverride: return 2;
+		case Clock_16bitTransfer:   return 4 * part.value;
+		default: return 0;
+	}
+}
+
+u16 getTotalClocks(Clock_Calculation const& calculation) {
+	u16 total = 0;
+	for (u8 i = 0; i < calculation.part_count; i++) {
+		total += getPartClocks(calculation.parts[i]);
+	}
+	return total;
+}
+
+void explainClocks(FILE* f, Clock_Calculation const& calculation) {
+	if (calculation.part_count == 1 && calculation.parts[0].type == Clock_None) {
+		fprintf(f, "Clocks: +0 = %llu (unimplemented) | ", gClocks);
+		return;
+	}
+
+	u8 const totalClocks = getTotalClocks(calculation);
+	gClocks += totalClocks;
+	fprintf(f, "Clocks: +%d = %llu (", totalClocks, gClocks);
+
+	for (u8 i = 0; i < calculation.part_count; i++) {
+		if (i > 0) fprintf(f, " + ");
+		auto const part = calculation.parts[i];
+		u8 const clocks = getPartClocks(part);
+		switch (part.type) {
+			case Clock_Inst:  fprintf(f, "%d", clocks);                          break;
+			case Clock_EA:    fprintf(f, "%dea", clocks);                        break;
+			case Clock_Range: fprintf(f, "%d[%d,%d]", clocks, part.A, part.B);   break;
+			case Clock_AorB:  fprintf(f, "%d{%d|%d}", clocks, part.A, part.B);   break;
+			case Clock_SegmentOverride:  fprintf(f, "%dso", clocks); break;
+			case Clock_16bitTransfer:    fprintf(f, "%dt", clocks);    break;
+			default: unreachable();
+		}
+	}
+	fprintf(f, ") | ");
+}
+
+Clock_Calculation getInstructionClocksCalculation(Instruction const& inst) {
+	Clock_Calculation calculation = { .part_count = 0 };
+	switch (inst.type) {
+		case Inst_mov: {
+			if ((IsOperandSegment(inst.dst) && IsOperandReg16(inst.src)) ||
+			    (IsOperandReg16(inst.dst) && IsOperandSegment(inst.src))) {
+				ClocksPushInst(calculation, 2);
+			}
+			else if (IsOperandSegment(inst.dst) && IsOperandMem16(inst.src)) {
+				ClocksPushInst(calculation, 8);
+				ClocksPushEA(calculation, inst.src.address, 1);
+			}
+			else if (IsOperandMem(inst.dst) && IsOperandSegment(inst.src)) {
+				ClocksPushInst(calculation, 8);
+				ClocksPushEA(calculation, inst.dst.address, 1);
+			}
+			else if (IsOperandMem(inst.dst) && IsOperandAccumulator(inst.src)) {
+				ClocksPushInst(calculation, 10);
+				ClocksPush16bitTransfer(calculation, inst.dst.address, 1);
+			}
+			else if (IsOperandAccumulator(inst.dst) && IsOperandMem(inst.src)) {
+				ClocksPushInst(calculation, 10);
+				ClocksPush16bitTransfer(calculation, inst.src.address, 1);
+			}
+			else if (IsOperandReg(inst.dst) && IsOperandReg(inst.src)) {
+				ClocksPushInst(calculation, 2);
+			}
+			else if (IsOperandReg(inst.dst) && IsOperandMem(inst.src)) {
+				ClocksPushInst(calculation, 8);
+				ClocksPushEA(calculation, inst.src.address, 1);
+			}
+			else if (IsOperandMem(inst.dst) && IsOperandReg(inst.src)) {
+				ClocksPushInst(calculation, 9);
+				ClocksPushEA(calculation, inst.dst.address, 1);
+			}
+			else if (IsOperandReg(inst.dst) && IsOperandImm(inst.src)) {
+				ClocksPushInst(calculation, 4);
+			}
+			else if (IsOperandMem(inst.dst) && IsOperandImm(inst.src)) {
+				ClocksPushInst(calculation, 10);
+				ClocksPushEA(calculation, inst.dst.address, 1);
+			}
+		} break;
+
+		case Inst_add: {
+			if (IsOperandReg(inst.dst) && IsOperandGeneralReg(inst.src)) {
+				ClocksPushInst(calculation, 3);
+			}
+			else if (IsOperandReg(inst.dst) && IsOperandMem(inst.src)) {
+				ClocksPushInst(calculation, 9);
+				ClocksPushEA(calculation, inst.src.address, 1);
+			}
+			else if (IsOperandMem(inst.dst) && IsOperandReg(inst.src)) {
+				ClocksPushInst(calculation, 16);
+				ClocksPushEA(calculation, inst.dst.address, 2);
+			}
+			else if (IsOperandReg(inst.dst) && IsOperandImm(inst.src)) {
+				ClocksPushInst(calculation, 4);
+			}
+			else if (IsOperandMem(inst.dst) && IsOperandImm(inst.src)) {
+				ClocksPushInst(calculation, 17);
+				ClocksPushEA(calculation, inst.dst.address, 2);
+			}
+		} break;
+
+		default: ClocksPush(calculation, Clock_Calculation_Part{.type=Clock_None});
+	}
+	assertTrue(calculation.part_count > 0);
+	return calculation;
+}
+
 int Decoder_Context::printEffectiveAddressBase(EffectiveAddress::Base const base) const {
 	using namespace EffectiveAddress;
+	int constexpr BASE_INDEX_LEN = sizeof("?? + ??")-1;
+
 	if (shouldDecorateOutput()) {
 		switch (base) {
 			case Base::Direct: return 0;
 			#define X(R) REGISTER_COLOR R ASCII_COLOR_END
-			case Base::bx_si: print(X("bx") " + " X("si")); return sizeof("?? + ??")-1;
-			case Base::bx_di: print(X("bx") " + " X("di")); return sizeof("?? + ??")-1;
-			case Base::bp_si: print(X("bp") " + " X("si")); return sizeof("?? + ??")-1;
-			case Base::bp_di: print(X("bp") " + " X("di")); return sizeof("?? + ??")-1;
+			case Base::bx_si: print(X("bx") " + " X("si")); return BASE_INDEX_LEN;
+			case Base::bx_di: print(X("bx") " + " X("di")); return BASE_INDEX_LEN;
+			case Base::bp_si: print(X("bp") " + " X("si")); return BASE_INDEX_LEN;
+			case Base::bp_di: print(X("bp") " + " X("di")); return BASE_INDEX_LEN;
 			#undef X
 
 			case Base::si: case Base::di: case Base::bp: case Base::bx: {
@@ -348,7 +492,7 @@ int Decoder_Context::printInstOperand(Instruction_Operand const& operand, Instru
 
 		case Instruction_Operand_Type::Jump: {
 			// The offset gets added 2 because the jump instructions take up 2 bytes.
-			i8 const disp = static_cast<i8>(operand.jump.offset + 2);
+			i8 const disp = static_cast<i8>(operand.jump_offset + 2);
 			if (disp > 0) {
 				n+=_print("$+");
 				if (shouldDecorateOutput()) print(NUMBER_COLOR);
@@ -380,12 +524,13 @@ int Decoder_Context::printInstOperand(Instruction_Operand const& operand, Instru
 	return n;
 }
 
-bool decodeOrSimulate(FILE* outFile, Slice<u8> const binaryBytes, bool const exec) {
-	Decoder_Context decoder(outFile, binaryBytes, exec);
+bool decodeOrSimulate(FILE* outFile, Slice<u8> const binaryBytes, bool const exec, bool const showClocks) {
+	Decoder_Context decoder(outFile, binaryBytes, exec, showClocks);
 	decoder.printBitsHeader();
 
 	memset(gMemory, 0, sizeof(gMemory));
 	memset(gRegisterValues, 0, sizeof(gRegisterValues));
+	gClocks = 0;
 
 	while (decoder.bytesRead < binaryBytes.count) {
 		u8 byte; decoder.advance(byte);

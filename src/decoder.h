@@ -59,6 +59,18 @@ struct RegisterInfo {
     RegisterUsage usage : 2;
 };
 
+#define IsRegisterGeneral(reg)    \
+	((reg).type == Register::a || \
+	 (reg).type == Register::b || \
+	 (reg).type == Register::c || \
+	 (reg).type == Register::d)
+
+#define IsRegisterSegment(reg)     \
+	((reg).type == Register::cs || \
+	 (reg).type == Register::ds || \
+	 (reg).type == Register::ss || \
+	 (reg).type == Register::es)
+
 u16 getRegisterValue(RegisterInfo const& reg);
 void setRegisterValue(RegisterInfo const& reg, u16 value);
 void incrementRegister(RegisterInfo const& reg, i16 increment);
@@ -94,49 +106,87 @@ namespace EffectiveAddress {
 	};
     const char* base2string(Base base);
 	u32 getInnerValue(Info const& info);
+	u8 getClocks(Info const& info);
 
 	#define is_Effective_Address_Direct(MOD, R_M) ((MOD) == 0b00 && (R_M) == 0b110)
+
+	#define has_EA_Disp(ea) ((ea).displacement.word != 0)
+	#define is_EA_Base_or_Index(ea)                 \
+		((ea).base == EffectiveAddress::Base::bx || \
+		 (ea).base == EffectiveAddress::Base::bp || \
+		 (ea).base == EffectiveAddress::Base::si || \
+		 (ea).base == EffectiveAddress::Base::di)
+	#define is_EA_Base_Plus_Index(ea)                  \
+		((ea).base == EffectiveAddress::Base::bx_si || \
+		 (ea).base == EffectiveAddress::Base::bx_di || \
+		 (ea).base == EffectiveAddress::Base::bp_si || \
+		 (ea).base == EffectiveAddress::Base::bp_di)
 }
 
+enum Clock_Calculation_Part_Type : u8 {
+	Clock_None = 0,
+	Clock_Inst,
+	Clock_EA,
+	Clock_Range,
+	Clock_AorB,
+	Clock_SegmentOverride,
+	Clock_16bitTransfer,
+};
+
+struct Clock_Calculation_Part {
+	union {
+		u16 value;
+		struct { u8 A; u8 B; };
+		EffectiveAddress::Info address;
+	};
+	Clock_Calculation_Part_Type type;
+};
+
+struct Clock_Calculation {
+	Clock_Calculation_Part parts[4];
+	u8 part_count;
+};
+
+#define ClocksPush(calc, part) do { \
+	u8 const _i = (calc).part_count++;        \
+	StaticArrayBoundsCheck(_i, (calc).parts); \
+	(calc).parts[_i] = part;                  \
+} while (0)
+
+#define ClocksPushInst(calc, val) \
+	ClocksPush(calc, (Clock_Calculation_Part{.value=val, .type=Clock_Inst}))
+
+#define ClocksPushEA(calc, ea, transfers) do {                               \
+	ClocksPush(calc, (Clock_Calculation_Part{.address=ea, .type=Clock_EA})); \
+	ClocksPush16bitTransfer(calc, ea, transfers);                            \
+} while (0)
+
+#define ClocksPush16bitTransfer(calc, ea, transfers) do {             \
+	bool const is_odd = EffectiveAddress::getInnerValue(ea) % 2 == 1; \
+	bool const is_wide = (ea).wide;                                   \
+	if (is_wide && is_odd) {                                          \
+		ClocksPush(calc, (Clock_Calculation_Part{                     \
+			.value=transfers,                                         \
+			.type=Clock_16bitTransfer})                               \
+		);                                                            \
+	}                                                                 \
+} while (0)
+
+u8 getPartClocks(Clock_Calculation_Part const& part);
+u16 getTotalClocks(Clock_Calculation const& calculation);
+void explainClocks(FILE* f, Clock_Calculation const& calculation);
+
 namespace Jumps {
-	enum struct Type : u8 {
-		jo = 112,     // 0b01110000 = 112
-		jno,          // 0b01110001 = 113
-		jb,           // 0b01110010 = 114
-		jnb,          // 0b01110011 = 115
-		je,           // 0b01110100 = 116
-		jne,          // 0b01110101 = 117
-		jbe,          // 0b01110110 = 118
-		ja,           // 0b01110111 = 119
-		js,           // 0b01111000 = 120
-		jns,          // 0b01111001 = 121
-		jp,           // 0b01111010 = 122
-		jnp,          // 0b01111011 = 123
-		jl,           // 0b01111100 = 124
-		jnl,          // 0b01111101 = 125
-		jle,          // 0b01111110 = 126
-		jg,           // 0b01111111 = 127
-		loopnz = 224, // 0b11100000 = 224
-		loopz,        // 0b11100001 = 225
-		loop,         // 0b11100010 = 226
-		jcxz,         // 0b11100011 = 227
-	};
+	typedef i8 Offset;
 
-	#define JumpModifiesCX(jump) \
-		((jump).type == Jumps::Type::loopnz || \
-		 (jump).type == Jumps::Type::loopz  || \
-		 (jump).type == Jumps::Type::loop)
-	#define ByteToJumpType(byte) static_cast<Jumps::Type>(byte)
+	enum struct Outcome : u8 { error, jumped, stayed};
+	constexpr const char* Outcome_Names[3] = {"error", "jump", "stayed"};
+	#define GetJumpOutcomeName(outcome) Jumps::Outcome_Names[static_cast<u8>(outcome)]
 
-	struct Info {
-		Type type;
-		i8 offset;
-	};
-
-	enum struct Outcome { error, jumped, stayed };
-
-	const char* getMnemonic(Type type);
-	const char* getOutcomeName(Outcome outcome);
+	#define JumpModifiesCX(inst_type) \
+		((inst_type) == Inst_loopnz || \
+		 (inst_type) == Inst_loopz  || \
+		 (inst_type) == Inst_loop)
 }
 
 enum struct Instruction_Operand_Type : u8 {
@@ -153,79 +203,121 @@ constexpr const char* Instruction_Operand_Type_Names[] = {
 };
 #undef X
 
+#define GetInstOpTypeName(op) Instruction_Operand_Type_Names[static_cast<u8>((op).type)]
+
 struct Instruction_Operand {
 	union {
 		RegisterInfo reg;
 		EffectiveAddress::Info address;
 		Immediate immediate;
-		Jumps::Info jump;
+		Jumps::Offset jump_offset;
 	};
 	Instruction_Operand_Type type;
 };
 
-enum struct Instruction_Operand_Prefix : u8 { None = 0, Byte, Word };
-constexpr const char* InstOpPrefixName[3] = { "", "byte", "word"};
-Instruction_Operand_Prefix getInstDstPrefix(Instruction_Operand const& dst, Instruction_Operand const& src);
+#define IsOperandReg(operand) ((operand).type == Instruction_Operand_Type::Register)
+#define IsOperandImm(operand) ((operand).type == Instruction_Operand_Type::Immediate)
+#define IsOperandMem(operand) ((operand).type == Instruction_Operand_Type::EffectiveAddress)
 
-#define IsInstRegister(inst)  ((inst).type == Instruction_Operand_Type::Register)
-#define IsInstImmediate(inst) ((inst).type == Instruction_Operand_Type::Immediate)
-#define IsInstMemory(inst)    ((inst).type == Instruction_Operand_Type::EffectiveAddress)
+#define IsOperandReg16(operand) (IsOperandReg(operand) && (operand).reg.usage == RegisterUsage::x)
+#define IsOperandMem16(operand) (IsOperandMem(operand) && (operand).address.wide)
+
+#define IsOperandSegment(operand) (IsOperandReg(operand) && IsRegisterSegment((operand).reg))
+#define IsOperandGeneralReg(operand) (IsOperandReg(operand) && IsRegisterGeneral((operand).reg))
+#define IsOperandAccumulator(operand) (IsOperandReg(operand) && (operand).reg.type == Register::a)
 
 // rr: Register, []: Memory, XX: Immediate
 //
 //     1. inst rr, (rr | XX | [])
 //     2. inst [], (rr | XX)
 //
-#define IsBinaryInstTypeOrderValid(dst, src)                                                        \
-    ((IsInstRegister(dst) && (IsInstRegister(src) || IsInstImmediate(src) || IsInstMemory(src))) || \
-     (IsInstMemory(dst)   && (IsInstRegister(src) || IsInstImmediate(src))))
+#define IsBinaryInstTypeOrderValid(inst)                       \
+    ((IsOperandReg((inst).dst) && (IsOperandReg((inst).src) || \
+                                   IsOperandImm((inst).src) || \
+                                   IsOperandMem((inst).src)))  \
+                                                            || \
+     (IsOperandMem((inst).dst) && (IsOperandReg((inst).src) || \
+	                               IsOperandImm((inst).src))))
+
+
+#define ErrorComment_InvalidInstructionTypeOrder(inst) \
+	LOG_ERROR_STRING ": `%s <%s> <%s>` is an invalid order of types.", \
+	GetInstMnemonic(inst), \
+	GetInstOpTypeName((inst).dst), \
+	GetInstOpTypeName((inst).src)
 
 String_Builder getInstOpName(Instruction_Operand const& operand);
 u16  getInstOpValue(Instruction_Operand const& operand);
 void setInstOpValue(Instruction_Operand const& operand, u16 value);
 
-#define InstJump(typeByte, data) Instruction_Operand{ \
-	.jump=Jumps::Info{                                \
-		.type=ByteToJumpType(typeByte),               \
-		.offset=signExtendByte(data),                 \
-	},                                                \
-	.type = Instruction_Operand_Type::Jump,           \
+#define InstOpNone Instruction_Operand{ .type = Instruction_Operand_Type::None }
+
+#define InstOpJump(data) Instruction_Operand{ \
+	.jump_offset=signExtendByte(data),        \
+	.type = Instruction_Operand_Type::Jump,   \
 }
 
-#define InstImmediate(Wide, Value) Instruction_Operand{ \
+#define InstOpImmediate(Wide, Value) Instruction_Operand{ \
 	.immediate = makeImmediate(Wide, Value),            \
 	.type = Instruction_Operand_Type::Immediate,        \
 }
 
-#define InstEffectiveAddress(MOD, R_M, Wide, Disp) Instruction_Operand{ \
-	.address = EffectiveAddress::Info {                                 \
-		.base = (is_Effective_Address_Direct(MOD, R_M))                 \
-				? EffectiveAddress::Base::Direct                        \
-				: Effective_Address_Table[R_M],                         \
-		.displacement = makeImmediateDisp(Disp, MOD, R_M),              \
-		.wide = Wide,                                                   \
-	},                                                                  \
-	.type = Instruction_Operand_Type::EffectiveAddress,                 \
+#define InstOpEffectiveAddress(MOD, R_M, Wide, Disp) Instruction_Operand{ \
+	.address = EffectiveAddress::Info {                                   \
+		.base = (is_Effective_Address_Direct(MOD, R_M))                   \
+				? EffectiveAddress::Base::Direct                          \
+				: Effective_Address_Table[R_M],                           \
+		.displacement = makeImmediateDisp(Disp, MOD, R_M),                \
+		.wide = Wide,                                                     \
+	},                                                                    \
+	.type = Instruction_Operand_Type::EffectiveAddress,                   \
 }
 
-#define InstEffectiveAddressDirectWord(Wide, Disp) Instruction_Operand{ \
-		.address = EffectiveAddress::Info {                             \
-			.base = EffectiveAddress::Base::Direct,                     \
-			.displacement = makeImmediateWord(Disp),                    \
-			.wide = Wide,                                               \
-		},                                                              \
-		.type = Instruction_Operand_Type::EffectiveAddress,             \
+#define InstOpEffectiveAddressDirectWord(Wide, Disp) Instruction_Operand{ \
+		.address = EffectiveAddress::Info {                               \
+			.base = EffectiveAddress::Base::Direct,                       \
+			.displacement = makeImmediateWord(Disp),                      \
+			.wide = Wide,                                                 \
+		},                                                                \
+		.type = Instruction_Operand_Type::EffectiveAddress,               \
 	}
 
-#define InstGeneralReg(Type, Usage) Instruction_Operand{           \
-	.reg = {.type = Register::Type, .usage = RegisterUsage::Usage},\
-	.type = Instruction_Operand_Type::Register,                    \
+#define InstOpGeneralReg(Type, Usage) Instruction_Operand{           \
+	.reg = {.type = Register::Type, .usage = RegisterUsage::Usage},  \
+	.type = Instruction_Operand_Type::Register,                      \
 }
 
-#define InstNonGeneralReg(Type) Instruction_Operand{           \
-	.reg = {.type = Register::Type, .usage = RegisterUsage::x},\
-	.type = Instruction_Operand_Type::Register,                \
+#define InstOpNonGeneralReg(Type) Instruction_Operand{           \
+	.reg = {.type = Register::Type, .usage = RegisterUsage::x},  \
+	.type = Instruction_Operand_Type::Register,                  \
 }
+
+enum Instruction_Type : u8 {
+	Inst_None = 0,
+	#include "instructions.inl"
+	Inst_Count,
+};
+
+struct Instruction {
+	Instruction_Operand dst;
+	Instruction_Operand src;
+	Instruction_Type type;
+};
+
+Clock_Calculation getInstructionClocksCalculation(Instruction const& inst);
+
+#define SwapInstructionOperands(inst) Swap(Instruction_Operand, (inst).dst, (inst).src)
+
+constexpr const char* Instruction_Mnemonics[Inst_Count] = {
+	#define Inst(x) #x,
+	Inst(INVALID_INSTRUCTION)
+	#include "instructions.inl"
+};
+#define GetInstMnemonic(inst) Instruction_Mnemonics[static_cast<u8>((inst).type)]
+
+enum struct Instruction_Operand_Prefix : u8 { None, Byte,   Word };
+constexpr const char* InstOpPrefixName[3] = { "",  "byte", "word"};
+Instruction_Operand_Prefix getInstDstPrefix(Instruction const& inst);
 
 namespace FlagsRegister {
     enum struct Bit : u16 { CF = 0, PF = 2, AF = 4, ZF = 6, SF, OF, IF, DF, TF};
@@ -242,22 +334,22 @@ namespace FlagsRegister {
 
 // Expects to be indexed as [REG][W] or as [R/M][W]
 constexpr Instruction_Operand REG_Table[8][2] = {
-	[0b000] = {InstGeneralReg(a,l), InstGeneralReg(a,x)},
-	[0b001] = {InstGeneralReg(c,l), InstGeneralReg(c,x)},
-	[0b010] = {InstGeneralReg(d,l), InstGeneralReg(d,x)},
-	[0b011] = {InstGeneralReg(b,l), InstGeneralReg(b,x)},
-	[0b100] = {InstGeneralReg(a,h), InstNonGeneralReg(sp)},
-	[0b101] = {InstGeneralReg(c,h), InstNonGeneralReg(bp)},
-	[0b110] = {InstGeneralReg(d,h), InstNonGeneralReg(si)},
-	[0b111] = {InstGeneralReg(b,h), InstNonGeneralReg(di)},
+	[0b000] = {InstOpGeneralReg(a,l), InstOpGeneralReg(a,x)},
+	[0b001] = {InstOpGeneralReg(c,l), InstOpGeneralReg(c,x)},
+	[0b010] = {InstOpGeneralReg(d,l), InstOpGeneralReg(d,x)},
+	[0b011] = {InstOpGeneralReg(b,l), InstOpGeneralReg(b,x)},
+	[0b100] = {InstOpGeneralReg(a,h), InstOpNonGeneralReg(sp)},
+	[0b101] = {InstOpGeneralReg(c,h), InstOpNonGeneralReg(bp)},
+	[0b110] = {InstOpGeneralReg(d,h), InstOpNonGeneralReg(si)},
+	[0b111] = {InstOpGeneralReg(b,h), InstOpNonGeneralReg(di)},
 };
 
 // Expects to be indexed as [SR]
 constexpr Instruction_Operand SR_Table[4] = {
-	[0b00] = InstNonGeneralReg(es),
-	[0b01] = InstNonGeneralReg(cs),
-	[0b10] = InstNonGeneralReg(ss),
-	[0b11] = InstNonGeneralReg(ds),
+	[0b00] = InstOpNonGeneralReg(es),
+	[0b01] = InstOpNonGeneralReg(cs),
+	[0b10] = InstOpNonGeneralReg(ss),
+	[0b11] = InstOpNonGeneralReg(ds),
 };
 
 // Expects to be indexed as [R/M]
@@ -305,6 +397,7 @@ constexpr const char* RegisterFullNames[RegisterCount] = {
 
 extern u16 gRegisterValues[RegisterCount];
 extern u8 gMemory[1024 * 1024];
+extern u64 gClocks;
 
 Register getReg(const char* reg);
 
@@ -316,7 +409,7 @@ force_inline inline u16 getIP() {
 	return gRegisterValues[RegToID(Register::ip)];
 }
 
-bool decodeOrSimulate(FILE* outFile, Slice<u8> binaryBytes, bool exec);
+bool decodeOrSimulate(FILE* outFile, Slice<u8> binaryBytes, bool exec, bool showClocks);
 void printBits(FILE* outFile, u8 byte, int count);
 void printBits(FILE* outFile, u8 byte, int count, char ending);
 
@@ -326,9 +419,10 @@ struct Decoder_Context {
 	Byte_Stack_8086 byteStack = {};
 	i64 bytesRead = 0;
 	bool exec = false;
+	bool showClocks = false;
 
-	explicit Decoder_Context(FILE* OutFile, Slice<u8> const& BinaryBytes, bool const Exec):
-		outFile(OutFile), binaryBytes(BinaryBytes), exec(Exec) {}
+	explicit Decoder_Context(FILE* OutFile, Slice<u8> const& BinaryBytes, bool const Exec, bool const ShowClocks):
+		outFile(OutFile), binaryBytes(BinaryBytes), exec(Exec), showClocks(ShowClocks) {}
 
 	[[nodiscard]] force_inline bool shouldDecorateOutput() const {
 		return isatty(fileno(outFile));
@@ -397,6 +491,12 @@ struct Decoder_Context {
 			case Disp_08_bit: return advance08Bits(byte);
 			case Disp_16_bit: return advance16Bits(byte);
 			default: unreachable();
+		}
+	}
+
+	void explainClocksUpdate(Instruction const& inst) const {
+		if (showClocks) {
+			explainClocks(outFile, getInstructionClocksCalculation(inst));
 		}
 	}
 
@@ -496,25 +596,22 @@ struct Decoder_Context {
 		}
 	}
 
-	void printInst(const char* mnemonic, Instruction_Operand const& dst, Instruction_Operand const& src) const {
-		int n = 0;
+	void printInst(Instruction const& inst) const {
+		assertTrue(inst.dst.type != Instruction_Operand_Type::None);
 		if (shouldDecorateOutput()) print(MNEMONIC_COLOR);
-		n += _print("%s ", mnemonic);
+		int n = _print("%s ", GetInstMnemonic(inst));
 		if (shouldDecorateOutput()) print(ASCII_COLOR_END);
-		n += printInstOperand(dst, getInstDstPrefix(dst, src));
-		if (src.type != Instruction_Operand_Type::None) {
+		n += printInstOperand(inst.dst, getInstDstPrefix(inst));
+		if (inst.src.type != Instruction_Operand_Type::None) {
 			n += _print(", ");
-			n += printInstOperand(src, Instruction_Operand_Prefix::None);
+			n += printInstOperand(inst.src, Instruction_Operand_Prefix::None);
 		}
-		n ++; fputc(' ', outFile);
 		for (int i = 0; i < INSTRUCTION_LINE_SIZE-n; i++) {
 			fputc(' ', outFile);
 		}
 		if (shouldDecorateOutput()) print(COMMENT_COLOR);
-	}
-
-	void printInst(const char* mnemonic, Instruction_Operand const& operand) const {
-		printInst(mnemonic, operand, Instruction_Operand{.type=Instruction_Operand_Type::None});
+		print(" ; ");
+		explainClocksUpdate(inst);
 	}
 
 	void printByteStack() const {

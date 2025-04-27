@@ -1,29 +1,11 @@
 #include "add_sub_cmp.h"
 #include "string_builder.h"
 
-/*
-Homework:
-	- All 3 versions of ADD
-	- All 3 versions of SUB
-	- All 3 versions of CMP
-*/
-
-enum struct Type { add, sub, cmp };
-
 struct Common_Format {
-	Type type;
+	Instruction_Type type;
 	u8 firstByteLiteral[3];
 	u8 format1Literal;
 };
-
-static const char* getMnemonic(Common_Format const& format) {
-	switch (format.type) {
-		case Type::add: return "add";
-		case Type::sub: return "sub";
-		case Type::cmp: return "cmp";
-		default: unreachable();
-	}
-}
 
 static u8 Count1s(u8 const byte) {
 	return ((byte >> 0) & 0b1) + ((byte >> 1) & 0b1) +
@@ -39,18 +21,18 @@ static void setFlagsFromResult(u16 const result) {
 	setBit(Bit::SF, (result >> 15) & 0b1);
 }
 
-static u16 execOp(Common_Format const& format, u16 const A, u16 const B) {
+static u16 execOp(Instruction_Type const inst_type, u16 const A, u16 const B) {
 	u16 result;
-	switch (format.type) {
-		case Type::add:
+	switch (inst_type) {
+		case Inst_add:
 			result = A + B;
 			setFlagsFromResult(result);
 			return result;
-		case Type::sub:
+		case Inst_sub:
 			result = A - B;
 			setFlagsFromResult(result);
 			return result;
-		case Type::cmp:
+		case Inst_cmp:
 			result = A - B;
 			setFlagsFromResult(result);
 			return A;
@@ -58,43 +40,37 @@ static u16 execOp(Common_Format const& format, u16 const A, u16 const B) {
 	}
 }
 
-void exec_ADD_SUB_CMP(
-	Decoder_Context const& decoder,
-	Instruction_Operand const& dst,
-	Instruction_Operand const& src,
-	Common_Format const& format)
-{
-    if (IsBinaryInstTypeOrderValid(dst, src)) {
-    	String_Builder dstName = getInstOpName(dst); defer(dstName.destroy());
+void exec_ADD_SUB_CMP(Decoder_Context const& decoder, Instruction const& inst) {
+    if (IsBinaryInstTypeOrderValid(inst)) {
+    	String_Builder dstName = getInstOpName(inst.dst);
+    	defer(dstName.destroy());
+
 		u16 const oldFlags = FlagsRegister::get();
-        u16 const oldValue = getInstOpValue(dst);
-		u16 const newValue = execOp(format, oldValue, getInstOpValue(src));
-        setInstOpValue(dst, newValue);
-        decoder.print("; %s:0x%x->0x%x ", dstName.items, oldValue, newValue);
+        u16 const oldValue = getInstOpValue(inst.dst);
+		u16 const newValue = execOp(inst.type, oldValue, getInstOpValue(inst.src));
+        setInstOpValue(inst.dst, newValue);
+        decoder.print("%s:0x%x->0x%x ", dstName.items, oldValue, newValue);
 		decoder.printIP(" flags:");
 		decoder.printlnFlags(oldFlags);
 	} else {
-        decoder.println("; " LOG_ERROR_STRING ": `%s <%s> <%s>` is an invalid order of types.",
-        	getMnemonic(format),
-        	Instruction_Operand_Type_Names[static_cast<u8>(dst.type)],
-        	Instruction_Operand_Type_Names[static_cast<u8>(src.type)]);
+		decoder.println(ErrorComment_InvalidInstructionTypeOrder(inst));
 	}
 }
 
 constexpr Common_Format FMT_ADD = {
-	Type::add,
+	Inst_add,
 	{[0]=0b000000, [1]=0b100000, [2]=0b0000010},
 	0b000,
 };
 
 constexpr Common_Format FMT_SUB = {
-	Type::sub,
+	Inst_sub,
 	{[0]=0b001010, [1]=0b100000, [2]=0b0010110},
 	0b101,
 };
 
 constexpr Common_Format FMT_CMP = {
-	Type::cmp,
+	Inst_cmp,
 	{[0]=0b001110, [1]=0b100000, [2]=0b0011110},
 	0b111,
 };
@@ -120,26 +96,26 @@ static void decodeFormat0(Decoder_Context &decoder, u8 &byte, Common_Format cons
 	assertTrue(is_REG_Valid(REG));
 	assertTrue(is_R_M_Valid(R_M));
 
-	Instruction_Operand src = {}, dst = {};
+	Instruction inst = { .type = format.type };
 
 	// (D = 0) REG is the source.
-	src = REG_Table[REG][W];
+	inst.src = REG_Table[REG][W];
 	if (is_MOD_Register_Mode(MOD)) {
-		dst = REG_Table[R_M][W];
+		inst.dst = REG_Table[R_M][W];
 	} else {
 		u16 const displacement = decoder.advanceDisplacement(MOD, R_M, byte);
-		dst = InstEffectiveAddress(MOD, R_M, W, displacement);
+		inst.dst = InstOpEffectiveAddress(MOD, R_M, W, displacement);
 	}
 
 	if (D) { // (D = 1) REG is the destination.
-		Swap(Instruction_Operand, src, dst);
+		SwapInstructionOperands(inst);
 	}
 
-	decoder.printInst(getMnemonic(format), dst, src);
+	decoder.printInst(inst);
 	if (decoder.exec) {
-		exec_ADD_SUB_CMP(decoder, dst, src, format);
+		exec_ADD_SUB_CMP(decoder, inst);
 	} else {
-		decoder.print("; (D:%d, W:%d, ", D, W);
+		decoder.print("(D:%d, W:%d, ", D, W);
 		decoder.printMOD(MOD, ' ');
 		decoder.printREG(REG, ' ');
 		decoder.printR_M(R_M, ')');
@@ -159,25 +135,25 @@ static void decodeFormat1(Decoder_Context &decoder, u8 &byte, Common_Format cons
 	assertTrue(is_MOD_Valid(MOD));
 	assertTrue(is_R_M_Valid(R_M));
 
-	Instruction_Operand src = {}, dst = {};
+	Instruction inst = { .type = format.type };
 
 	// (D = 0) REG is the source.
 	if (is_MOD_Register_Mode(MOD)) {
 		u16 const immediate = decoder.advance8or16Bits(!S && W, byte);
-		src = InstImmediate(!S && W, immediate);
-		dst = REG_Table[R_M][W];
+		inst.src = InstOpImmediate(!S && W, immediate);
+		inst.dst = REG_Table[R_M][W];
 	} else {
 		u16 const displacement = decoder.advanceDisplacement(MOD, R_M, byte);
 		u16 const immediate = decoder.advance8or16Bits(!S && W, byte);
-		src = InstImmediate(!S && W, immediate);
-		dst = InstEffectiveAddress(MOD, R_M, W, displacement);
+		inst.src = InstOpImmediate(!S && W, immediate);
+		inst.dst = InstOpEffectiveAddress(MOD, R_M, W, displacement);
 	}
 
-	decoder.printInst(getMnemonic(format), dst, src);
+	decoder.printInst(inst);
 	if (decoder.exec) {
-		exec_ADD_SUB_CMP(decoder, dst, src, format);
+		exec_ADD_SUB_CMP(decoder, inst);
 	} else {
-		decoder.print("; (W:%d, ", W);
+		decoder.print("(W:%d, ", W);
 		decoder.printMOD(MOD, ' ');
 		decoder.printR_M(R_M, ')');
 		decoder.print(" <- ");
@@ -191,14 +167,17 @@ static void decodeFormat2(Decoder_Context &decoder, u8 &byte, Common_Format cons
 
 	u16 const data = decoder.advance8or16Bits(W, byte);
 
-	Instruction_Operand const src = InstImmediate(W, data);
-	Instruction_Operand const dst = REG_Table[RegToID(Register::a)][W];
+	Instruction const inst = {
+		.dst = REG_Table[RegToID(Register::a)][W],
+		.src = InstOpImmediate(W, data),
+		.type = format.type,
+	};
 
-	decoder.printInst(getMnemonic(format), dst, src);
+	decoder.printInst(inst);
 	if (decoder.exec) {
-		exec_ADD_SUB_CMP(decoder, dst, src, format);
+		exec_ADD_SUB_CMP(decoder, inst);
 	} else {
-		decoder.print("; (W:%d) <- ", W);
+		decoder.print("(W:%d) <- ", W);
 		decoder.printByteStack();
 	}
 }

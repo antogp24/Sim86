@@ -110,6 +110,7 @@ struct Cmd_Args {
 	bool exec = false;
 	bool test = false;
 	bool dump = false;
+	bool showClocks = false;
 
 	explicit Cmd_Args(int const argc, char** argv) {
 		std::vector<const char*> nonFlags = {};
@@ -124,6 +125,9 @@ struct Cmd_Args {
 				test = true;
 			} else if (0 == strcmp(opt, "-dump")) {
 				dump = true;
+				exec = true;
+			} else if (0 == strcmp(opt, "-showclocks")) {
+				showClocks = true;
 				exec = true;
 			} else if (0 == strcmp(opt, "-d")) {
 				if (arg == nullptr) {
@@ -256,7 +260,7 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 	} else {
 		printfln(ASCII_COLOR_GREEN "; %s" ASCII_COLOR_END, inputAsmFileName.items);
 	}
-	bool const couldDecode = decodeOrSimulate(stdout, inputBinary, cmdArgs.exec);
+	bool const couldDecode = decodeOrSimulate(stdout, inputBinary, cmdArgs.exec, cmdArgs.showClocks);
 	putchar('\n');
 
 	if (couldDecode && cmdArgs.dump) {
@@ -292,7 +296,7 @@ void processAsm(Cmd_Args const& cmdArgs, const char* inputAsmPath) {
 
 		FILE* decodedAsmTextFile = fopen(decodedAsmTextFileName.items, "w");
 		assertTrue(decodedAsmTextFile != nullptr);
-		decodeOrSimulate(decodedAsmTextFile, inputBinary, false);
+		decodeOrSimulate(decodedAsmTextFile, inputBinary, false, false);
 		fclose(decodedAsmTextFile);
 		printfln(LOG_INFO_STRING": Created %s", decodedAsmTextFileName.items);
 		defer(deleteFile(decodedAsmTextFileName.items));

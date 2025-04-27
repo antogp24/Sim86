@@ -153,7 +153,7 @@ typedef unsigned int uint;
 #define TODO(msg) FatalDebugMsg("[TODO]", msg)
 
 #define StaticArrayBoundsCheck(i, arr) do {                   \
-	if ((i) < 0 || (i) > StaticArrayCount(arr)) {             \
+	if ((i) < 0 || (i) >= StaticArrayCount(arr)) {            \
 		FatalDebugMsg(                                        \
 			"[OutOfBounds]",                                  \
 			"Indexing " #arr "[%d] where len(" #arr ") = %d", \

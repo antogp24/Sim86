@@ -1,83 +1,75 @@
 #include "jumps.h"
 #include "string_builder.h"
 
-const char* Jumps::getMnemonic(Type const type) {
-	switch (type) {
-		case Type::jo:     return "jo";
-		case Type::jno:    return "jno";
-		case Type::jb:     return "jb";
-		case Type::jnb:    return "jnb";
-		case Type::je:     return "je";
-		case Type::jne:    return "jne";
-		case Type::jbe:    return "jbe";
-		case Type::ja:     return "ja";
-		case Type::js:     return "js";
-		case Type::jns:    return "jns";
-		case Type::jp:     return "jp";
-		case Type::jnp:    return "jnp";
-		case Type::jl:     return "jl";
-		case Type::jnl:    return "jnl";
-		case Type::jle:    return "jle";
-		case Type::jg:     return "jg";
-		case Type::loop:   return "loop";
-		case Type::loopz:  return "loopz";
-		case Type::loopnz: return "loopnz";
-		case Type::jcxz:   return "jcxz";
-		default: return nullptr;
+
+static Instruction_Type jumpTypeFromByte(u8 const byte) {
+	switch (byte) {
+		case 0b01110000: return Inst_jo;
+		case 0b01110001: return Inst_jno;
+		case 0b01110010: return Inst_jb;
+		case 0b01110011: return Inst_jnb;
+		case 0b01110100: return Inst_je;
+		case 0b01110101: return Inst_jne;
+		case 0b01110110: return Inst_jbe;
+		case 0b01110111: return Inst_ja;
+		case 0b01111000: return Inst_js;
+		case 0b01111001: return Inst_jns;
+		case 0b01111010: return Inst_jp;
+		case 0b01111011: return Inst_jnp;
+		case 0b01111100: return Inst_jl;
+		case 0b01111101: return Inst_jnl;
+		case 0b01111110: return Inst_jle;
+		case 0b01111111: return Inst_jg;
+		case 0b11100000: return Inst_loopnz;
+		case 0b11100001: return Inst_loopz;
+		case 0b11100010: return Inst_loop;
+		case 0b11100011: return Inst_jcxz;
+		default:         return Inst_None;
 	}
 }
 
-const char* Jumps::getOutcomeName(Outcome const outcome) {
-	switch (outcome) {
-		case Outcome::error: return "error";
-		case Outcome::jumped: return "jumped";
-		case Outcome::stayed: return "stayed";
-        default: return nullptr;
-	}
-}
-
-static Jumps::Outcome runJump(Decoder_Context &decoder, u8 &byte, Jumps::Info const& jump) {
-	using namespace Jumps;
+static Jumps::Outcome runJump(Decoder_Context &decoder, u8 &byte, Instruction const& inst) {
 	using namespace FlagsRegister;
 	bool jumped = false;
-	switch (jump.type) {
-		case Type::jo:  jumped =  getBit(Bit::OF); break;
-		case Type::jno: jumped = !getBit(Bit::OF); break;
-		case Type::jb:  jumped =  getBit(Bit::CF); break;
-		case Type::jnb: jumped = !getBit(Bit::CF); break;
-		case Type::je:  jumped =  getBit(Bit::ZF); break;
-		case Type::jne: jumped = !getBit(Bit::ZF); break;
-		case Type::jbe: jumped =  (getBit(Bit::ZF) || getBit(Bit::CF)); break;
-		case Type::ja:  jumped = !(getBit(Bit::ZF) || getBit(Bit::CF)); break;
-		case Type::js:  jumped =  getBit(Bit::SF); break;
-		case Type::jns: jumped = !getBit(Bit::SF); break;
-		case Type::jp:  jumped =  getBit(Bit::PF); break;
-		case Type::jnp: jumped = !getBit(Bit::PF); break;
-		case Type::jl:  jumped = (getBit(Bit::OF) != getBit(Bit::SF)); break;
-		case Type::jnl: jumped = (getBit(Bit::OF) == getBit(Bit::SF)); break;
-		case Type::jle: jumped =  (getBit(Bit::OF) != getBit(Bit::SF) || getBit(Bit::ZF)); break;
-		case Type::jg:  jumped = !(getBit(Bit::OF) != getBit(Bit::SF) || getBit(Bit::ZF)); break;
-		case Type::loop:
+	switch (inst.type) {
+		case Inst_jo:  jumped =  getBit(Bit::OF); break;
+		case Inst_jno: jumped = !getBit(Bit::OF); break;
+		case Inst_jb:  jumped =  getBit(Bit::CF); break;
+		case Inst_jnb: jumped = !getBit(Bit::CF); break;
+		case Inst_je:  jumped =  getBit(Bit::ZF); break;
+		case Inst_jne: jumped = !getBit(Bit::ZF); break;
+		case Inst_jbe: jumped =  (getBit(Bit::ZF) || getBit(Bit::CF)); break;
+		case Inst_ja:  jumped = !(getBit(Bit::ZF) || getBit(Bit::CF)); break;
+		case Inst_js:  jumped =  getBit(Bit::SF); break;
+		case Inst_jns: jumped = !getBit(Bit::SF); break;
+		case Inst_jp:  jumped =  getBit(Bit::PF); break;
+		case Inst_jnp: jumped = !getBit(Bit::PF); break;
+		case Inst_jl:  jumped = (getBit(Bit::OF) != getBit(Bit::SF)); break;
+		case Inst_jnl: jumped = (getBit(Bit::OF) == getBit(Bit::SF)); break;
+		case Inst_jle: jumped =  (getBit(Bit::OF) != getBit(Bit::SF) || getBit(Bit::ZF)); break;
+		case Inst_jg:  jumped = !(getBit(Bit::OF) != getBit(Bit::SF) || getBit(Bit::ZF)); break;
+		case Inst_loop:
 			incrementRegister(RegX(c), -1);
 			jumped = (getRegisterValue(RegX(c)) != 0);
 			break;
-		case Type::loopz:
+		case Inst_loopz:
 			incrementRegister(RegX(c), -1);
 			jumped = getBit(Bit::ZF);
 			break;
-		case Type::loopnz:
+		case Inst_loopnz:
 			incrementRegister(RegX(c), -1);
 			jumped = !getBit(Bit::ZF);
 			break;
-		case Type::jcxz: jumped = (getRegisterValue(RegX(c)) == 0); break;
+		case Inst_jcxz: jumped = (getRegisterValue(RegX(c)) == 0); break;
 		default: {
-			decoder.println("; " LOG_ERROR_STRING ": %s is unimplemented", getMnemonic(jump.type));
-			return Outcome::error;
+			decoder.println(LOG_ERROR_STRING ": %s is unimplemented", GetInstMnemonic(inst));
+			return Jumps::Outcome::error;
 		}
 	}
 	if (jumped) {
-		incrementIP(jump.offset + 2);
-		decoder.bytesRead += jump.offset;
+		Jumps::Offset const offset = inst.dst.jump_offset;
+		incrementIP(offset + 2);
+		decoder.bytesRead += offset;
 		byte = decoder.binaryBytes.ptr[decoder.bytesRead];
 		decoder.resetByteStack();
 	}
@@ -85,9 +77,7 @@ static Jumps::Outcome runJump(Decoder_Context &decoder, u8 &byte, Jumps::Info co
 }
 
 bool isByte_Jump(u8 const byte) {
-    const bool result = (byte >= 112 && byte <= 127) ||
-                        (byte >= 224 && byte <= 227);
-    return result;
+	return jumpTypeFromByte(byte) != Inst_None;
 }
 
 void decode_Jump(Decoder_Context& decoder, u8& byte) {
@@ -95,25 +85,29 @@ void decode_Jump(Decoder_Context& decoder, u8& byte) {
 	u8 const typeByte = byte;
 	u8 const data = decoder.advance08Bits(byte);
 
-	auto const operand = InstJump(typeByte, data);
+	Instruction inst = {
+		.dst = InstOpJump(data),
+		.src = InstOpNone,
+		.type = jumpTypeFromByte(typeByte),
+	};
 
-	decoder.printInst(Jumps::getMnemonic(operand.jump.type), operand);
+	decoder.printInst(inst);
 	if (decoder.exec) {
         u16 const oldIP = getIP();
 		u16 const oldCX = getRegisterValue(RegX(c));
-		if (auto const outcome = runJump(decoder, byte, operand.jump);
+		if (auto const outcome = runJump(decoder, byte, inst);
 			outcome != Jumps::Outcome::error) {
             u16 const ip = getIP();
 			u16 const cx = getRegisterValue(RegX(c));
-            decoder.print("; %s ", getOutcomeName(outcome));
-			if (JumpModifiesCX(operand.jump)) {
+            decoder.print("%s ", GetJumpOutcomeName(outcome));
+			if (JumpModifiesCX(inst.type)) {
 				decoder.print("cx:%d->%d ", oldCX, cx);
 			}
             decoder.println("ip:0x%x->0x%x", oldIP, ip);
 			if (decoder.shouldDecorateOutput()) decoder.print(ASCII_COLOR_END);
 		}
 	} else {
-		decoder.print("; (disp:%3d) <- ", operand.jump.offset);
+		decoder.print("(disp:%3d) <- ", inst.dst.jump_offset);
 		decoder.printByteStack();
 	}
 }

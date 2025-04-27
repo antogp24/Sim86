@@ -15,6 +15,6 @@ cmake-build-*/
 !CMakeLists.txt
 
 # Personal Files
-ignored.txt
+ignored*.txt
 .temp86_*
 dump_*
