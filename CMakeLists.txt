@@ -9,8 +9,8 @@ add_executable(Sim86 src/main.cpp
         src/decoder.cpp
         src/util.h
         src/decoder.h
-        src/add_sub_cmp.cpp
-        src/add_sub_cmp.h
+        src/common_instructions.cpp
+        src/common_instructions.h
         src/ascii_colors.h
         src/mov.cpp
         src/mov.h

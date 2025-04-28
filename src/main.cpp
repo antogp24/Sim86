@@ -80,7 +80,7 @@ bool hasSubString(std::string const& str, const char* substr) {
 	size_t const len = str.size();
 	size_t const subLen = strlen(substr);
 	for (int i = 0; i < len; i++) {
-		if (0 == strncmp(str.c_str() + i, substr, Min(len - i, subLen))) {
+		if (len - i > subLen && strncmp(str.c_str() + i, substr, subLen) == 0) {
 			return true;
 		}
 	}

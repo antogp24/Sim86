@@ -5,7 +5,7 @@
 
 #include "decoder.h"
 #include "mov.h"
-#include "add_sub_cmp.h"
+#include "common_instructions.h"
 #include "jumps.h"
 #include "util.h"
 #include "string_builder.h"
@@ -34,11 +34,8 @@ Immediate makeImmediateDisp(u16 const disp, u8 const MOD, u8 const R_M) {
 }
 
 Instruction_Operand_Prefix getInstDstPrefix(Instruction const& inst) {
-	if (inst.dst.type == Instruction_Operand_Type::EffectiveAddress &&
-	    inst.src.type == Instruction_Operand_Type::Immediate) {
-		return inst.dst.address.wide
-			? Instruction_Operand_Prefix::Word
-			: Instruction_Operand_Prefix::Byte;
+	if (IsOperandMem(inst.dst)) {
+		return MakeInstPrefix(inst.dst.address.wide);
 	}
 	return Instruction_Operand_Prefix::None;
 }
@@ -70,10 +67,11 @@ String_Builder getInstOpName(Instruction_Operand const& operand) {
 	return builder;
 }
 
-u16 getInstOpValue(Instruction_Operand const& operand) {
+u32 getInstOpValue(Instruction_Operand const& operand) {
 	switch (operand.type) {
-		case Instruction_Operand_Type::Register:  return getRegisterValue(operand.reg);
-		case Instruction_Operand_Type::Immediate: return operand.immediate.word;
+		case Instruction_Operand_Type::Register:     return getRegisterValue(operand.reg);
+		case Instruction_Operand_Type::RegisterPair: return getRegisterValue(operand.reg_pair.b);
+		case Instruction_Operand_Type::Immediate:    return operand.immediate.word;
 
 		case Instruction_Operand_Type::EffectiveAddress: {
 			u32 const idx = EffectiveAddress::getInnerValue(operand.address);
@@ -85,15 +83,19 @@ u16 getInstOpValue(Instruction_Operand const& operand) {
 				return gMemory[idx];
 			}
 		}
-
 		default: return 0;
 	}
 }
 
-void setInstOpValue(Instruction_Operand const& operand, u16 const value) {
+void setInstOpValue(Instruction_Operand const& operand, u32 const value) {
 	switch (operand.type) {
 		case Instruction_Operand_Type::Register: {
 			setRegisterValue(operand.reg, value);
+		} break;
+
+		case Instruction_Operand_Type::RegisterPair: {
+			setRegisterValue(operand.reg_pair.b, value & 0xFFFF);
+			setRegisterValue(operand.reg_pair.a, value >> 16);
 		} break;
 
 		case Instruction_Operand_Type::EffectiveAddress: {
@@ -541,8 +543,8 @@ bool decodeOrSimulate(FILE* outFile, Slice<u8> const binaryBytes, bool const exe
 		else if (isByte_Jump(byte)) {
 			decode_Jump(decoder, byte);
 		}
-		else if (isByte_ADD_SUB_CMP(decoder, byte)) {
-			decode_ADD_SUB_CMP(decoder, byte);
+		else if (isByte_common_inst(decoder, byte)) {
+			decode_common_inst(decoder, byte);
 		}
 		else {
 			eprintf(LOG_ERROR_STRING": Had an unrecognized byte (" ASCII_COLOR_B_RED);

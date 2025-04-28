@@ -47,17 +47,21 @@ enum struct Register : u8 {
 };
 static_assert(static_cast<u8>(Register::Count) == 0b1110);
 
-#define RegX(R) RegisterInfo{.type=Register::R, .usage=RegisterUsage::x}
-#define IDToReg(reg) static_cast<Register>(reg)
-#define RegToID(reg) static_cast<u8>(reg)
-#define RegisterCount RegToID(Register::Count)
-
 enum struct RegisterUsage : u8 { x, l, h };
 
 struct RegisterInfo {
     Register type : 4;
     RegisterUsage usage : 2;
 };
+
+struct RegisterPair {
+	RegisterInfo a, b;
+};
+
+#define RegX(R) RegisterInfo{.type=Register::R, .usage=RegisterUsage::x}
+#define IDToReg(reg) static_cast<Register>(reg)
+#define RegToID(reg) static_cast<u8>(reg)
+#define RegisterCount RegToID(Register::Count)
 
 #define IsRegisterGeneral(reg)    \
 	((reg).type == Register::a || \
@@ -191,22 +195,20 @@ namespace Jumps {
 
 enum struct Instruction_Operand_Type : u8 {
 	None = 0,
-	Immediate,
-	Register,
-	EffectiveAddress,
-	Jump,
+	#include "instruction_types.inl"
 };
 
-#define X(x) [static_cast<u8>(Instruction_Operand_Type::x)] = #x
 constexpr const char* Instruction_Operand_Type_Names[] = {
-	X(None), X(Immediate), X(Register), X(EffectiveAddress), X(Jump),
+	#define InstOpType(x) #x,
+	InstOpType(None)
+	#include "instruction_types.inl"
 };
-#undef X
 
 #define GetInstOpTypeName(op) Instruction_Operand_Type_Names[static_cast<u8>((op).type)]
 
 struct Instruction_Operand {
 	union {
+		RegisterPair reg_pair;
 		RegisterInfo reg;
 		EffectiveAddress::Info address;
 		Immediate immediate;
@@ -215,9 +217,11 @@ struct Instruction_Operand {
 	Instruction_Operand_Type type;
 };
 
+#define IsOperandNone(operand) ((operand).type == Instruction_Operand_Type::None)
 #define IsOperandReg(operand) ((operand).type == Instruction_Operand_Type::Register)
 #define IsOperandImm(operand) ((operand).type == Instruction_Operand_Type::Immediate)
 #define IsOperandMem(operand) ((operand).type == Instruction_Operand_Type::EffectiveAddress)
+#define IsOperandRegPair(operand) ((operand).type == Instruction_Operand_Type::RegisterPair)
 
 #define IsOperandReg16(operand) (IsOperandReg(operand) && (operand).reg.usage == RegisterUsage::x)
 #define IsOperandMem16(operand) (IsOperandMem(operand) && (operand).address.wide)
@@ -247,8 +251,8 @@ struct Instruction_Operand {
 	GetInstOpTypeName((inst).src)
 
 String_Builder getInstOpName(Instruction_Operand const& operand);
-u16  getInstOpValue(Instruction_Operand const& operand);
-void setInstOpValue(Instruction_Operand const& operand, u16 value);
+u32  getInstOpValue(Instruction_Operand const& operand);
+void setInstOpValue(Instruction_Operand const& operand, u32 value);
 
 #define InstOpNone Instruction_Operand{ .type = Instruction_Operand_Type::None }
 
@@ -258,8 +262,8 @@ void setInstOpValue(Instruction_Operand const& operand, u16 value);
 }
 
 #define InstOpImmediate(Wide, Value) Instruction_Operand{ \
-	.immediate = makeImmediate(Wide, Value),            \
-	.type = Instruction_Operand_Type::Immediate,        \
+	.immediate = makeImmediate(Wide, Value),              \
+	.type = Instruction_Operand_Type::Immediate,          \
 }
 
 #define InstOpEffectiveAddress(MOD, R_M, Wide, Disp) Instruction_Operand{ \
@@ -318,6 +322,7 @@ constexpr const char* Instruction_Mnemonics[Inst_Count] = {
 enum struct Instruction_Operand_Prefix : u8 { None, Byte,   Word };
 constexpr const char* InstOpPrefixName[3] = { "",  "byte", "word"};
 Instruction_Operand_Prefix getInstDstPrefix(Instruction const& inst);
+#define MakeInstPrefix(Wide) ((Wide) ? Instruction_Operand_Prefix::Word : Instruction_Operand_Prefix::Byte)
 
 namespace FlagsRegister {
     enum struct Bit : u16 { CF = 0, PF = 2, AF = 4, ZF = 6, SF, OF, IF, DF, TF};
@@ -418,6 +423,7 @@ struct Decoder_Context {
 	Slice<u8> const& binaryBytes;
 	Byte_Stack_8086 byteStack = {};
 	i64 bytesRead = 0;
+	u64 instructionCounter = 0;
 	bool exec = false;
 	bool showClocks = false;
 
@@ -586,17 +592,15 @@ struct Decoder_Context {
 		va_end(args);
 	}
 
-	void printBitsHeader() const {
-		if (!exec) {
-			if (shouldDecorateOutput()) {
-				println(MNEMONIC_COLOR "bits" ASCII_COLOR_END " " NUMBER_COLOR "16" ASCII_COLOR_END);
-			} else {
-				println("bits 16");
-			}
-		}
+	void printBitsHeader() {
+		printInst(Instruction{
+			.dst = InstOpImmediate(false, 16),
+			.type=Inst_bits,
+		});
+		fputc('\n', outFile);
 	}
 
-	void printInst(Instruction const& inst) const {
+	void printInst(Instruction const& inst) {
 		assertTrue(inst.dst.type != Instruction_Operand_Type::None);
 		if (shouldDecorateOutput()) print(MNEMONIC_COLOR);
 		int n = _print("%s ", GetInstMnemonic(inst));
@@ -610,7 +614,7 @@ struct Decoder_Context {
 			fputc(' ', outFile);
 		}
 		if (shouldDecorateOutput()) print(COMMENT_COLOR);
-		print(" ; ");
+		print(" ;(%d) ", ++instructionCounter);
 		explainClocksUpdate(inst);
 	}
 
